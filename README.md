@@ -40,6 +40,28 @@ java DocumentFilterLogger.java --demo
 Alternatively compile with `javac DocumentFilterLogger.java`, then run
 `java DocumentFilterLogger` (optionally with `--demo`).
 
+Use **Save Log…** to save the current session's complete history to a chosen
+file. Use **Open Log…** to reconstruct the latest session from a saved log,
+including its text, caret, and selection, and continue editing. No separate
+document file is needed. Saving again preserves the original events and adds
+the new ones, so backward replay still works across opening and continuing.
+Opening replaces the current session after confirmation; save it first if you
+want to keep it. Saving an existing file asks before replacing it.
+
+You can also open a log for editing from the command line, optionally choosing
+a session number:
+
+```sh
+java DocumentFilterLogger.java --open saved-document.log
+java DocumentFilterLogger.java --open saved-document.log 1
+```
+
+**Replay current log** opens a replay window for the current session, including
+unsaved edits. Restoring a saved log does not record synthetic edits. Named
+logs are updated when you use Save Log; the automatic `document-filter.log`
+continues recording separately, with a new checkpoint when you open a log.
+Choose another filename when saving to avoid overwriting that active file.
+
 Replay a recorded session in a separate, read-only window:
 
 ```sh
@@ -80,7 +102,8 @@ reverse stepping, so very large logs can use substantial memory. Load a log
 after recording finishes to replay a complete session.
 
 Run the headless replay checks (escaped text, forward/backward edits, selection,
-session selection, invalid edits, and playback speeds) with:
+session selection, invalid edits, playback speeds, and saving/opening/continuing
+with history preserved) with:
 
 ```sh
 java -Djava.awt.headless=true DocumentFilterLogger.java --self-test

@@ -1,6 +1,11 @@
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.io.PrintWriter;
+import java.io.IOException;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.AtomicMoveNotSupportedException;
+import javax.swing.JFileChooser;
+import javax.swing.JOptionPane;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.HashMap;
@@ -46,6 +51,15 @@ public class DocumentFilterLogger {
             testReplay();
             return;
         }
+        ReplayLog opened = null;
+        if (args.length > 0 && args[0].equals("--open")) {
+            if (args.length < 2 || args.length > 3) {
+                throw new IllegalArgumentException("Usage: --open LOG_FILE [SESSION_NUMBER]");
+            }
+            opened = ReplayLog.load(Path.of(args[1]),
+                    args.length == 3 ? Integer.parseInt(args[2]) : -1);
+        }
+        final ReplayLog initialLog = opened;
         PrintWriter log = new PrintWriter(Files.newBufferedWriter(LOG_PATH,
                 StandardCharsets.UTF_8, StandardOpenOption.CREATE,
                 StandardOpenOption.APPEND), true);
@@ -67,12 +81,17 @@ public class DocumentFilterLogger {
             log.close();
             return;
         }
-        SwingUtilities.invokeLater(() -> showWindow(filter));
+        SwingUtilities.invokeLater(() -> showWindow(filter, initialLog));
     }
 
-    private static void showWindow(LoggingFilter filter) {
+    private static void showWindow(LoggingFilter filter, ReplayLog initialLog) {
         JTextArea text = createTextArea(filter);
         AbstractDocument document = (AbstractDocument) text.getDocument();
+        if (initialLog != null) restoreLog(text, filter, initialLog);
+        JFrame frame = new JFrame("DocumentFilter logger");
+        JLabel status = new JLabel("Log contains the document and edit history.");
+        JFileChooser chooser = new JFileChooser();
+        chooser.setSelectedFile(new java.io.File("saved-document.log"));
 
         JPanel buttons = new JPanel();
         JButton insert = new JButton("insertString");
@@ -95,15 +114,79 @@ public class DocumentFilterLogger {
         buttons.add(replace);
         buttons.add(remove);
 
-        JFrame frame = new JFrame("DocumentFilter logger");
+        JButton save = new JButton("Save Log…");
+        save.addActionListener(event -> {
+            if (chooser.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) return;
+            Path path = chooser.getSelectedFile().toPath();
+            if (Files.exists(path) && JOptionPane.showConfirmDialog(frame,
+                    "Replace " + path + "?", "Save Log", JOptionPane.YES_NO_OPTION)
+                    != JOptionPane.YES_OPTION) return;
+            try {
+                filter.save(path);
+                status.setText("Saved " + path.toAbsolutePath());
+            } catch (Exception exception) {
+                showError(frame, exception);
+            }
+        });
+        JButton open = new JButton("Open Log…");
+        open.addActionListener(event -> {
+            if (chooser.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) return;
+            try {
+                Path path = chooser.getSelectedFile().toPath();
+                ReplayLog loaded = ReplayLog.load(path, -1);
+                if (JOptionPane.showConfirmDialog(frame,
+                        "Open this log and replace the current session? Save your current log first "
+                        + "if you want to keep it.", "Open Log", JOptionPane.OK_CANCEL_OPTION)
+                        != JOptionPane.OK_OPTION) return;
+                restoreLog(text, filter, loaded);
+                status.setText("Opened " + path.toAbsolutePath() + " — continue editing, then Save Log.");
+                text.requestFocusInWindow();
+            } catch (Exception exception) {
+                showError(frame, exception);
+            }
+        });
+        JButton replay = new JButton("Replay current log");
+        replay.addActionListener(event -> {
+            try {
+                new ReplayWindow(ReplayLog.parse(new ArrayList<>(filter.entries))).show();
+            } catch (Exception exception) {
+                showError(frame, exception);
+            }
+        });
+        buttons.add(save);
+        buttons.add(open);
+        buttons.add(replay);
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.add(new JLabel("Type, paste, delete, or use the buttons. Log: "
-                + LOG_PATH.toAbsolutePath()), java.awt.BorderLayout.NORTH);
+        frame.add(status, java.awt.BorderLayout.NORTH);
         frame.add(new JScrollPane(text), java.awt.BorderLayout.CENTER);
         frame.add(buttons, java.awt.BorderLayout.SOUTH);
         frame.pack();
+        frame.setSize(Math.max(950, frame.getWidth()), frame.getHeight());
         frame.setLocationRelativeTo(null);
         frame.setVisible(true);
+    }
+
+    private static void showError(JFrame frame, Exception exception) {
+        JOptionPane.showMessageDialog(frame, exception.getMessage(), "Log error",
+                JOptionPane.ERROR_MESSAGE);
+    }
+
+    static void restoreLog(JTextArea text, LoggingFilter filter, ReplayLog loaded) {
+        ReplayState state = loaded.states.get(loaded.states.size() - 1);
+        filter.restoring = true;
+        try {
+            text.setText(state.text);
+            text.setCaretPosition(state.mark);
+            text.moveCaretPosition(state.dot);
+        } finally {
+            filter.restoring = false;
+        }
+        filter.entries.clear();
+        filter.entries.addAll(loaded.lines);
+        filter.lastTime = state.time;
+        // The automatic audit file starts a checkpoint; saved logs retain the entire history.
+        filter.audit(Instant.now() + " session initialText=" + LoggingFilter.quote(state.text));
+        filter.audit(Instant.now() + " caretUpdate dot=" + state.dot + " mark=" + state.mark);
     }
 
     private static JTextArea createTextArea(LoggingFilter filter) {
@@ -139,6 +222,31 @@ public class DocumentFilterLogger {
 
     public static class LoggingFilter extends DocumentFilter {
         private final PrintWriter log;
+        final List<String> entries = new ArrayList<>();
+        boolean restoring;
+        Instant lastTime = Instant.MIN;
+
+        synchronized void save(Path path) throws IOException {
+            if (path.toAbsolutePath().normalize().equals(LOG_PATH.toAbsolutePath().normalize())
+                    || (Files.exists(path) && Files.exists(LOG_PATH) && Files.isSameFile(path, LOG_PATH))) {
+                throw new IOException("Choose a different filename from the active automatic log: " + LOG_PATH);
+            }
+            // Validate before writing, and replace the target only after the full write succeeds.
+            ReplayLog.parse(new ArrayList<>(entries));
+            Path target = path.toAbsolutePath();
+            Path temporary = Files.createTempFile(target.getParent(), ".saved-log-", ".tmp");
+            try {
+                Files.write(temporary, entries, StandardCharsets.UTF_8);
+                try {
+                    Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE,
+                            StandardCopyOption.REPLACE_EXISTING);
+                } catch (AtomicMoveNotSupportedException exception) {
+                    Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+                }
+            } finally {
+                Files.deleteIfExists(temporary);
+            }
+        }
 
         public LoggingFilter(PrintWriter log) {
             this.log = log;
@@ -191,7 +299,16 @@ public class DocumentFilterLogger {
         }
 
         private synchronized void write(String message) {
-            String entry = Instant.now() + " " + message;
+            if (restoring) return;
+            Instant now = Instant.now();
+            if (now.isBefore(lastTime)) now = lastTime;
+            lastTime = now;
+            String entry = now + " " + message;
+            audit(entry);
+            entries.add(entry);
+        }
+
+        private void audit(String entry) {
             log.println(entry);
             if (log.checkError()) {
                 throw new IllegalStateException("Unable to write " + LOG_PATH);
@@ -230,6 +347,7 @@ public class DocumentFilterLogger {
 
     static class ReplayLog {
         final List<ReplayState> states = new ArrayList<>();
+        final List<String> lines = new ArrayList<>();
         // Each boundary includes an edit and the caret/key events following it.
         final List<Integer> boundaries = new ArrayList<>();
         static final Pattern FIELD = Pattern.compile(
@@ -255,6 +373,7 @@ public class DocumentFilterLogger {
 
         static ReplayLog parse(List<String> lines) {
             ReplayLog result = new ReplayLog();
+            result.lines.addAll(lines);
             String text = "";
             int dot = 0, mark = 0;
             Instant previous = null;
@@ -534,7 +653,59 @@ public class DocumentFilterLogger {
             window.seek(0);
             check(window.elapsedNanos == 0 && window.text.getText().isEmpty(), "restart");
         });
+        testSaveAndContinue(lines.subList(0, 3), special);
         System.out.println("Replay self-test passed");
+    }
+
+    static void testSaveAndContinue(List<String> original, String special) throws Exception {
+        Path directory = Files.createTempDirectory("document-log-roundtrip");
+        Path saved = directory.resolve("saved.log");
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                try {
+                    LoggingFilter filter = new LoggingFilter(new PrintWriter(new java.io.StringWriter()));
+                    filter.write("session initialText=\"\"");
+                    JTextArea text = createTextArea(filter);
+                    restoreLog(text, filter, ReplayLog.parse(original));
+                    check(text.getText().equals(special), "open restores Unicode and escaped text");
+                    check(text.getCaret().getDot() == special.length()
+                            && text.getCaret().getMark() == 0, "open restores selection direction");
+                    check(filter.entries.equals(original), "restore creates no synthetic events");
+                    filter.save(saved);
+                    check(Files.readAllLines(saved).equals(original), "save preserves history");
+
+                    LoggingFilter continued = new LoggingFilter(new PrintWriter(new java.io.StringWriter()));
+                    JTextArea next = createTextArea(continued);
+                    restoreLog(next, continued, ReplayLog.load(saved, -1));
+                    ((AbstractDocument) next.getDocument()).replace(0, special.length(), "Continued", null);
+                    next.setCaretPosition(2);
+                    next.moveCaretPosition(6);
+                    continued.save(saved);
+                    ReplayLog roundtrip = ReplayLog.load(saved, -1);
+                    ReplayState finalState = roundtrip.states.get(roundtrip.states.size() - 1);
+                    check(finalState.text.equals("Continued") && finalState.dot == 6
+                            && finalState.mark == 2, "save after continued editing");
+                    check(roundtrip.lines.subList(0, original.size()).equals(original),
+                            "continued save retains original events");
+                    int previous = roundtrip.previousEdit(roundtrip.states.size() - 1);
+                    check(roundtrip.states.get(previous).text.equals(special),
+                            "reverse replay crosses the save/open boundary");
+                    restoreLog(next, continued, roundtrip);
+                    check(next.getText().equals("Continued") && continued.entries.equals(roundtrip.lines),
+                            "repeated reopen");
+                    try {
+                        continued.save(directory.resolve("missing").resolve("failed.log"));
+                        throw new AssertionError("Save to missing directory succeeded");
+                    } catch (IOException expected) { }
+                    check(Files.readAllLines(saved).equals(roundtrip.lines), "failed save preserves existing log");
+                } catch (Exception exception) {
+                    throw new RuntimeException(exception);
+                }
+            });
+        } finally {
+            Files.deleteIfExists(saved);
+            Files.deleteIfExists(directory);
+        }
     }
 
     static void check(boolean condition, String message) {
