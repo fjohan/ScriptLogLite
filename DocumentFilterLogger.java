@@ -1,3 +1,5 @@
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -17,7 +19,7 @@ import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.DocumentFilter;
 
-/** Logs DocumentFilter editing methods and text-area caret events. */
+/** Logs DocumentFilter editing methods and text-area caret and key events. */
 public class DocumentFilterLogger {
     private static final Path LOG_PATH = Path.of("document-filter.log");
 
@@ -85,6 +87,17 @@ public class DocumentFilterLogger {
         JTextArea text = new JTextArea(12, 50);
         ((AbstractDocument) text.getDocument()).setDocumentFilter(filter);
         text.addCaretListener(filter::recordCaret);
+        text.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyPressed(KeyEvent event) {
+                filter.recordKey("keyPressed", event);
+            }
+
+            @Override
+            public void keyReleased(KeyEvent event) {
+                filter.recordKey("keyReleased", event);
+            }
+        });
         return text;
     }
 
@@ -133,6 +146,16 @@ public class DocumentFilterLogger {
             write("caretUpdate dot=" + event.getDot() + " mark=" + event.getMark()
                     + " selectionStart=" + Math.min(event.getDot(), event.getMark())
                     + " selectionEnd=" + Math.max(event.getDot(), event.getMark()));
+        }
+
+        public void recordKey(String method, KeyEvent event) {
+            write(method + " keyCode=" + event.getKeyCode()
+                    + " keyText=" + quote(KeyEvent.getKeyText(event.getKeyCode()))
+                    + " keyChar=" + (event.getKeyChar() == KeyEvent.CHAR_UNDEFINED
+                            ? "undefined" : quote(String.valueOf(event.getKeyChar())))
+                    + " modifiers=" + event.getModifiersEx()
+                    + " modifiersText=" + quote(KeyEvent.getModifiersExText(event.getModifiersEx()))
+                    + " keyLocation=" + event.getKeyLocation());
         }
 
         private void record(String method, int offset, int length,

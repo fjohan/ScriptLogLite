@@ -10,6 +10,11 @@ The text area's `CaretListener` also logs each `caretUpdate` event to the same
 outputs, including `dot` (the caret position), `mark` (the selection anchor),
 and the selection start and end. Equal dot and mark values mean no selection.
 
+A `KeyListener` logs `keyPressed` and `keyReleased` events received by the text
+area, including the key code, readable key name, character (or `undefined`),
+modifiers, and key location. These events are logged when the text area has
+keyboard focus; the buttons' programmatic edits do not generate key events.
+
 Requires a JDK (Java 11 or newer). Run directly from source:
 
 ```sh
