@@ -19,3 +19,13 @@
 2026-10-06T20:37:19.085665966Z caretUpdate dot=4 mark=1 selectionStart=1 selectionEnd=4
 2026-10-06T20:37:19.085729031Z remove offset=0 length=5 text=null attributes=null
 2026-10-06T20:37:19.085831965Z caretUpdate dot=0 mark=0 selectionStart=0 selectionEnd=0
+2026-10-06T20:51:52.581187161Z session initialText=""
+2026-10-06T20:51:52.619395435Z insertString offset=0 length=0 text="Hello" oldText="" attributes=null
+2026-10-06T20:51:52.652401664Z caretUpdate dot=5 mark=5 selectionStart=5 selectionEnd=5
+2026-10-06T20:51:52.652737658Z replace offset=0 length=5 text="World" oldText="Hello" attributes=null
+2026-10-06T20:51:52.652955926Z caretUpdate dot=0 mark=0 selectionStart=0 selectionEnd=0
+2026-10-06T20:51:52.653173642Z caretUpdate dot=5 mark=5 selectionStart=5 selectionEnd=5
+2026-10-06T20:51:52.653242126Z caretUpdate dot=1 mark=1 selectionStart=1 selectionEnd=1
+2026-10-06T20:51:52.653300354Z caretUpdate dot=4 mark=1 selectionStart=1 selectionEnd=4
+2026-10-06T20:51:52.653358180Z remove offset=0 length=5 text=null oldText="World" attributes=null
+2026-10-06T20:51:52.653439903Z caretUpdate dot=0 mark=0 selectionStart=0 selectionEnd=0
