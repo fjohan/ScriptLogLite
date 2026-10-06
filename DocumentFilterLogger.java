@@ -11,13 +11,13 @@ import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
+import javax.swing.event.CaretEvent;
 import javax.swing.text.AbstractDocument;
 import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.DocumentFilter;
-import javax.swing.text.PlainDocument;
 
-/** Logs every call to the three DocumentFilter editing methods. */
+/** Logs DocumentFilter editing methods and text-area caret events. */
 public class DocumentFilterLogger {
     private static final Path LOG_PATH = Path.of("document-filter.log");
 
@@ -30,11 +30,15 @@ public class DocumentFilterLogger {
         System.out.println("Logging to " + LOG_PATH.toAbsolutePath());
 
         if (args.length == 1 && args[0].equals("--demo")) {
-            PlainDocument document = new PlainDocument();
-            document.setDocumentFilter(filter);
-            document.insertString(0, "Hello", null);
-            document.replace(0, 5, "World", null);
-            document.remove(0, 5);
+            SwingUtilities.invokeAndWait(() -> edit(() -> {
+                JTextArea text = createTextArea(filter);
+                AbstractDocument document = (AbstractDocument) text.getDocument();
+                document.insertString(0, "Hello", null);
+                document.replace(0, 5, "World", null);
+                text.setCaretPosition(1);
+                text.moveCaretPosition(4);
+                document.remove(0, 5);
+            }));
             log.close();
             return;
         }
@@ -42,9 +46,8 @@ public class DocumentFilterLogger {
     }
 
     private static void showWindow(LoggingFilter filter) {
-        JTextArea text = new JTextArea(12, 50);
+        JTextArea text = createTextArea(filter);
         AbstractDocument document = (AbstractDocument) text.getDocument();
-        document.setDocumentFilter(filter);
 
         JPanel buttons = new JPanel();
         JButton insert = new JButton("insertString");
@@ -76,6 +79,13 @@ public class DocumentFilterLogger {
         frame.pack();
         frame.setLocationRelativeTo(null);
         frame.setVisible(true);
+    }
+
+    private static JTextArea createTextArea(LoggingFilter filter) {
+        JTextArea text = new JTextArea(12, 50);
+        ((AbstractDocument) text.getDocument()).setDocumentFilter(filter);
+        text.addCaretListener(filter::recordCaret);
+        return text;
     }
 
     private static void edit(DocumentEdit action) {
@@ -119,11 +129,21 @@ public class DocumentFilterLogger {
             super.remove(bypass, offset, length);
         }
 
-        private synchronized void record(String method, int offset, int length,
+        public void recordCaret(CaretEvent event) {
+            write("caretUpdate dot=" + event.getDot() + " mark=" + event.getMark()
+                    + " selectionStart=" + Math.min(event.getDot(), event.getMark())
+                    + " selectionEnd=" + Math.max(event.getDot(), event.getMark()));
+        }
+
+        private void record(String method, int offset, int length,
                 String text, AttributeSet attributes) {
-            String entry = Instant.now() + " " + method + " offset=" + offset
+            write(method + " offset=" + offset
                     + " length=" + length + " text=" + quote(text)
-                    + " attributes=" + quote(attributes == null ? null : attributes.toString());
+                    + " attributes=" + quote(attributes == null ? null : attributes.toString()));
+        }
+
+        private synchronized void write(String message) {
+            String entry = Instant.now() + " " + message;
             log.println(entry);
             if (log.checkError()) {
                 throw new IllegalStateException("Unable to write " + LOG_PATH);
