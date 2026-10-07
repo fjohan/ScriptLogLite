@@ -16,6 +16,12 @@ area, including the key code, readable key name, character (or `undefined`),
 modifiers, and key location. These events are logged when the text area has
 keyboard focus; the buttons' programmatic edits do not generate key events.
 
+Viewport movement logs `scrollChange x=… y=…` in pixels, covering horizontal
+and vertical scrolling (including scrolling caused by caret movement).
+Repeated notifications at the same position are ignored. Opening and replaying
+a log restores these positions; positions are clamped to the available scroll
+range if the window dimensions differ. Older logs default to position (0, 0).
+
 Requires a JDK (Java 11 or newer). Run directly from source:
 
 ```sh

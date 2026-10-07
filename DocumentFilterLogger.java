@@ -1,3 +1,5 @@
+import java.awt.Point;
+import java.awt.Dimension;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.io.PrintWriter;
@@ -86,6 +88,7 @@ public class DocumentFilterLogger {
 
     private static void showWindow(LoggingFilter filter, ReplayLog initialLog) {
         JTextArea text = createTextArea(filter);
+        JScrollPane scroll = createScrollPane(text, filter);
         AbstractDocument document = (AbstractDocument) text.getDocument();
         if (initialLog != null) restoreLog(text, filter, initialLog);
         JFrame frame = new JFrame("DocumentFilter logger");
@@ -158,12 +161,53 @@ public class DocumentFilterLogger {
         buttons.add(replay);
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.add(status, java.awt.BorderLayout.NORTH);
-        frame.add(new JScrollPane(text), java.awt.BorderLayout.CENTER);
+        frame.add(scroll, java.awt.BorderLayout.CENTER);
         frame.add(buttons, java.awt.BorderLayout.SOUTH);
         frame.pack();
         frame.setSize(Math.max(950, frame.getWidth()), frame.getHeight());
         frame.setLocationRelativeTo(null);
         frame.setVisible(true);
+        if (initialLog != null) {
+            ReplayState state = initialLog.states.get(initialLog.states.size() - 1);
+            SwingUtilities.invokeLater(() -> restoreScroll(text, filter, state));
+        }
+    }
+
+    static JScrollPane createScrollPane(JTextArea text, LoggingFilter filter) {
+        JScrollPane scroll = new JScrollPane(text);
+        text.putClientProperty("logScrollPane", scroll);
+        Point[] previous = {new Point()};
+        scroll.getViewport().addChangeListener(event -> {
+            Point position = scroll.getViewport().getViewPosition();
+            if (!position.equals(previous[0])) {
+                previous[0] = new Point(position);
+                filter.write("scrollChange x=" + position.x + " y=" + position.y);
+            }
+        });
+        return scroll;
+    }
+
+    static void applyScroll(JScrollPane scroll, int x, int y) {
+        Dimension preferred = scroll.getViewport().getView().getPreferredSize();
+        Dimension extent = scroll.getViewport().getExtentSize();
+        scroll.getViewport().setViewSize(new Dimension(
+                Math.max(preferred.width, extent.width), Math.max(preferred.height, extent.height)));
+        Dimension size = scroll.getViewport().getViewSize();
+        scroll.getViewport().setViewPosition(new Point(
+                Math.min(x, Math.max(0, size.width - extent.width)),
+                Math.min(y, Math.max(0, size.height - extent.height))));
+    }
+
+    static void restoreScroll(JTextArea text, LoggingFilter filter, ReplayState state) {
+        JScrollPane scroll = (JScrollPane) text.getClientProperty("logScrollPane");
+        if (scroll == null) return;
+        boolean previous = filter.restoring;
+        filter.restoring = true;
+        try {
+            applyScroll(scroll, state.scrollX, state.scrollY);
+        } finally {
+            filter.restoring = previous;
+        }
     }
 
     private static void showError(JFrame frame, Exception exception) {
@@ -178,6 +222,7 @@ public class DocumentFilterLogger {
             text.setText(state.text);
             text.setCaretPosition(state.mark);
             text.moveCaretPosition(state.dot);
+            restoreScroll(text, filter, state);
         } finally {
             filter.restoring = false;
         }
@@ -187,6 +232,7 @@ public class DocumentFilterLogger {
         // The automatic audit file starts a checkpoint; saved logs retain the entire history.
         filter.audit(Instant.now() + " session initialText=" + LoggingFilter.quote(state.text));
         filter.audit(Instant.now() + " caretUpdate dot=" + state.dot + " mark=" + state.mark);
+        filter.audit(Instant.now() + " scrollChange x=" + state.scrollX + " y=" + state.scrollY);
     }
 
     private static JTextArea createTextArea(LoggingFilter filter) {
@@ -330,16 +376,18 @@ public class DocumentFilterLogger {
     static class ReplayState {
         final Instant time;
         final String text;
-        final int dot, mark;
+        final int dot, mark, scrollX, scrollY;
         final String description;
         final boolean edit;
 
-        ReplayState(Instant time, String text, int dot, int mark,
+        ReplayState(Instant time, String text, int dot, int mark, int scrollX, int scrollY,
                 String description, boolean edit) {
             this.time = time;
             this.text = text;
             this.dot = dot;
             this.mark = mark;
+            this.scrollX = scrollX;
+            this.scrollY = scrollY;
             this.description = description;
             this.edit = edit;
         }
@@ -351,7 +399,7 @@ public class DocumentFilterLogger {
         // Each boundary includes an edit and the caret/key events following it.
         final List<Integer> boundaries = new ArrayList<>();
         static final Pattern FIELD = Pattern.compile(
-                "(\\w+)=(\"(?:\\\\.|[^\"\\\\])*\"|\\S+)");
+                "(\\w+)=(\"(?:\\\\.|[^\"\\\\])*+\"|\\S+)");
 
         static ReplayLog load(Path path, int session) throws Exception {
             List<List<String>> sessions = new ArrayList<>();
@@ -375,7 +423,7 @@ public class DocumentFilterLogger {
             ReplayLog result = new ReplayLog();
             result.lines.addAll(lines);
             String text = "";
-            int dot = 0, mark = 0;
+            int dot = 0, mark = 0, scrollX = 0, scrollY = 0;
             Instant previous = null;
             for (int i = 0; i < lines.size(); i++) {
                 String line = lines.get(i);
@@ -415,10 +463,16 @@ public class DocumentFilterLogger {
                         if (dot < 0 || mark < 0 || dot > text.length() || mark > text.length()) {
                             throw new IllegalArgumentException("caret outside document");
                         }
+                    } else if (method.equals("scrollChange")) {
+                        scrollX = Integer.parseInt(required(fields, "x"));
+                        scrollY = Integer.parseInt(required(fields, "y"));
+                        if (scrollX < 0 || scrollY < 0) {
+                            throw new IllegalArgumentException("negative scroll position");
+                        }
                     } else if (!method.equals("keyPressed") && !method.equals("keyReleased")) {
                         throw new IllegalArgumentException("unknown event " + method);
                     }
-                    result.states.add(new ReplayState(time, text, dot, mark,
+                    result.states.add(new ReplayState(time, text, dot, mark, scrollX, scrollY,
                             line.substring(parts[0].length() + 1), edit));
                 } catch (RuntimeException exception) {
                     throw new IllegalArgumentException("Invalid replay event " + (i + 1)
@@ -484,6 +538,7 @@ public class DocumentFilterLogger {
     static class ReplayWindow {
         final ReplayLog log;
         final JTextArea text = new JTextArea(12, 50);
+        final JScrollPane scroll = new JScrollPane(text);
         final JLabel status = new JLabel();
         final JButton play = new JButton("Play");
         final JComboBox<String> speed = new JComboBox<>(
@@ -555,6 +610,7 @@ public class DocumentFilterLogger {
             if (!text.getText().equals(state.text)) text.setText(state.text);
             text.setCaretPosition(state.mark);
             text.moveCaretPosition(state.dot);
+            applyScroll(scroll, state.scrollX, state.scrollY);
             status.setText("Event " + position + "/" + (log.states.size() - 1)
                     + " — " + state.description);
             status.setToolTipText(state.time + " " + state.description);
@@ -581,7 +637,7 @@ public class DocumentFilterLogger {
                 public void windowClosed(java.awt.event.WindowEvent event) { pause(); }
             });
             frame.add(status, java.awt.BorderLayout.NORTH);
-            frame.add(new JScrollPane(text), java.awt.BorderLayout.CENTER);
+            frame.add(scroll, java.awt.BorderLayout.CENTER);
             frame.add(controls, java.awt.BorderLayout.SOUTH);
             render();
             frame.setSize(900, 400);
@@ -654,7 +710,37 @@ public class DocumentFilterLogger {
             check(window.elapsedNanos == 0 && window.text.getText().isEmpty(), "restart");
         });
         testSaveAndContinue(lines.subList(0, 3), special);
+        testScroll();
         System.out.println("Replay self-test passed");
+    }
+
+    static void testScroll() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            LoggingFilter filter = new LoggingFilter(new PrintWriter(new java.io.StringWriter()));
+            filter.write("session initialText=\"\"");
+            JTextArea text = createTextArea(filter);
+            JScrollPane scroll = createScrollPane(text, filter);
+            scroll.setSize(200, 100);
+            scroll.doLayout();
+            text.setText(("Long line " + "x".repeat(100) + "\n").repeat(50));
+            applyScroll(scroll, 80, 120);
+            ReplayLog replay = ReplayLog.parse(new ArrayList<>(filter.entries));
+            ReplayState state = replay.states.get(replay.states.size() - 1);
+            check(state.scrollX == 80 && state.scrollY == 120, "both scroll axes logged");
+            restoreLog(text, filter, replay);
+            check(scroll.getViewport().getViewPosition().equals(new Point(80, 120)),
+                    "open restores scroll position");
+            check(filter.entries.equals(replay.lines), "scroll restoration is not logged");
+            ReplayWindow window = new ReplayWindow(replay);
+            window.scroll.setSize(200, 100);
+            window.scroll.doLayout();
+            window.seek(replay.states.size() - 1);
+            check(window.scroll.getViewport().getViewPosition().equals(new Point(80, 120)),
+                    "replay restores scroll position");
+            window.seek(0);
+            check(window.scroll.getViewport().getViewPosition().equals(new Point()),
+                    "reverse restores initial scroll position");
+        });
     }
 
     static void testSaveAndContinue(List<String> original, String special) throws Exception {
