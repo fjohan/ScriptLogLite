@@ -671,7 +671,6 @@ public class ScriptLogLite {
             if (log.checkError()) {
                 throw new IllegalStateException("Unable to write " + automaticPath);
             }
-            System.out.println(entry);
         }
 
         private static String quote(String text) {

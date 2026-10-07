@@ -29,7 +29,7 @@ histories. Replay timers stop when their internal frames close.
 Type, paste, delete, or use the Edit menu's insert/replace/remove commands. The filter
 allows edits through. Swing often calls `replace` for typing. Document operations
 that Swing ignores before reaching the filter do not produce filter events.
-The console provides diagnostic entries in text form.
+Events are recorded in JSON logs without printing them to stdout.
 
 ## JSON log format
 
