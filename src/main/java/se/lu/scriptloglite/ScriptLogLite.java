@@ -4,7 +4,6 @@ import java.awt.Point;
 import java.awt.Dimension;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
-import java.io.PrintWriter;
 import java.io.IOException;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -53,11 +52,7 @@ public class ScriptLogLite {
 
     public static void main(String[] args) throws Exception {
         if (!java.awt.GraphicsEnvironment.isHeadless()) {
-            try {
-                javax.swing.UIManager.setLookAndFeel(javax.swing.UIManager.getSystemLookAndFeelClassName());
-            } catch (Exception exception) {
-                System.err.println("Using default appearance: " + exception.getMessage());
-            }
+            installTheme(Theme.LIGHT);
         }
         if (args.length > 0 && args[0].equals("--replay")) {
             if (args.length < 2 || args.length > 3) {
@@ -86,8 +81,8 @@ public class ScriptLogLite {
         }
         final ReplayLog initialLog = opened;
         if (args.length == 1 && args[0].equals("--demo")) {
-            LoggingFilter filter = new LoggingFilter(new PrintWriter(java.io.OutputStream.nullOutputStream()));
-            filter.write("session initialText=\"\"");
+            LoggingFilter filter = new LoggingFilter();
+            filter.startSession("");
             SwingUtilities.invokeAndWait(() -> edit(() -> {
                 JTextArea text = createTextArea(filter);
                 AbstractDocument document = (AbstractDocument) text.getDocument();
@@ -107,6 +102,23 @@ public class ScriptLogLite {
         });
     }
 
+    enum Theme {
+        LIGHT("Light", "com.formdev.flatlaf.FlatLightLaf"),
+        DARK("Dark", "com.formdev.flatlaf.FlatDarkLaf");
+
+        final String label, className;
+        Theme(String label, String className) { this.label = label; this.className = className; }
+    }
+
+    // Loading by name keeps dependency-free headless log checks/source launching available.
+    static void installTheme(Theme theme) throws Exception {
+        try {
+            javax.swing.UIManager.setLookAndFeel(theme.className);
+        } catch (ClassNotFoundException exception) {
+            throw new IllegalStateException("FlatLaf is missing. Start with ./run.sh or build with Maven; "
+                    + "see README.md for the classpath instructions.", exception);
+        }
+    }
 
     /** One application window with independent document and replay tabs. */
     static class TabbedApplication {
@@ -120,7 +132,11 @@ public class ScriptLogLite {
         final List<LoggingFilter> recordings = new java.util.concurrent.CopyOnWriteArrayList<>();
         final List<Action> documentActions = new ArrayList<>();
         final JFileChooser chooser = new JFileChooser();
+        final Map<Theme, javax.swing.JRadioButtonMenuItem> themeChoices = new java.util.EnumMap<>(Theme.class);
+        Theme theme = Theme.LIGHT;
         final Timer autosave;
+        final BackgroundSaver saver;
+        boolean closeAllRequested, exitRequested;
         JFrame frame;
         int sequence;
 
@@ -163,6 +179,24 @@ public class ScriptLogLite {
                 } catch (Exception exception) { showError(frame, exception); }
             }));
             item(view, "Open Log for Replay…", 0, false, () -> open(true));
+            view.addSeparator();
+            JMenu appearance = new JMenu("Theme");
+            javax.swing.ButtonGroup themeGroup = new javax.swing.ButtonGroup();
+            for (Theme choice : Theme.values()) {
+                javax.swing.JRadioButtonMenuItem option = new javax.swing.JRadioButtonMenuItem(
+                        choice.label, choice == theme);
+                themeGroup.add(option);
+                appearance.add(option);
+                themeChoices.put(choice, option);
+                option.addActionListener(event -> {
+                    try { changeTheme(choice); }
+                    catch (Exception exception) {
+                        themeChoices.get(theme).setSelected(true);
+                        showError(frame, exception);
+                    }
+                });
+            }
+            view.add(appearance);
             tabsMenu.setMnemonic(KeyEvent.VK_T);
             menus.add(tabsMenu);
             tabsMenu.addMenuListener(new javax.swing.event.MenuListener() {
@@ -177,17 +211,17 @@ public class ScriptLogLite {
                     + "Save and open logs to continue writing, or replay them at any speed.",
                     "About", JOptionPane.INFORMATION_MESSAGE));
             updateActions();
+            saver = new BackgroundSaver(exception -> {
+                stopAutosave();
+                closeAllRequested = exitRequested = false;
+                showError(frame, exception);
+            });
             autosave = new Timer(500, event -> {
-                for (DocumentTab document : documents) {
-                    try { document.filter.saveAutomatic(); }
-                    catch (Exception exception) {
-                        ((Timer) event.getSource()).stop();
-                        showError(frame, exception);
-                        return;
-                    }
-                }
+                for (DocumentTab document : documents) saver.automatic(document.filter);
             });
         }
+
+        void stopAutosave() { autosave.stop(); }
 
         JMenu menu(String name, int mnemonic) {
             JMenu menu = new JMenu(name);
@@ -196,12 +230,43 @@ public class ScriptLogLite {
             return menu;
         }
 
+        void changeTheme(Theme selected) throws Exception {
+            // Look-and-feel updates must not turn view restoration into recorded edits.
+            Map<DocumentTab, Point> positions = new HashMap<>();
+            for (DocumentTab document : documents) {
+                JScrollPane scroll = (JScrollPane) document.text.getClientProperty("logScrollPane");
+                positions.put(document, new Point(scroll.getViewport().getViewPosition()));
+                document.filter.restoring = true;
+            }
+            try {
+                installTheme(selected);
+                for (java.awt.Window window : java.awt.Window.getWindows()) {
+                    SwingUtilities.updateComponentTreeUI(window);
+                }
+                if (frame == null) {
+                    SwingUtilities.updateComponentTreeUI(tabs);
+                    SwingUtilities.updateComponentTreeUI(menus);
+                    SwingUtilities.updateComponentTreeUI(toolbar);
+                }
+                SwingUtilities.updateComponentTreeUI(chooser);
+                for (Map.Entry<DocumentTab, Point> entry : positions.entrySet()) {
+                    JScrollPane scroll = (JScrollPane) entry.getKey().text.getClientProperty("logScrollPane");
+                    applyScroll(scroll, entry.getValue().x, entry.getValue().y);
+                }
+                for (ReplayWindow viewer : replays.values()) viewer.render();
+                theme = selected;
+                themeChoices.get(theme).setSelected(true);
+            } finally {
+                for (DocumentTab document : documents) document.filter.restoring = false;
+            }
+        }
+
         Action item(JMenu menu, String name, int key, boolean requiresDocument, Runnable command) {
             Action action = new AbstractAction(name) {
                 @Override
                 public void actionPerformed(java.awt.event.ActionEvent event) {
                     if (!requiresDocument || activeDocument() != null) command.run();
-                    updateActions();
+                    if (activeDocument() == null || !activeDocument().saving) updateActions();
                 }
             };
             if (key != 0) action.putValue(Action.ACCELERATOR_KEY,
@@ -227,11 +292,9 @@ public class ScriptLogLite {
             frame.setVisible(true);
             autosave.start();
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                for (LoggingFilter recording : recordings) {
-                    try { recording.saveAutomatic(); }
-                    catch (Exception exception) { System.err.println(exception.getMessage()); }
-                }
-            }));
+                for (LoggingFilter recording : recordings) saver.automatic(recording);
+                saver.close();
+            }, "scriptloglite-save-shutdown"));
         }
 
         DocumentTab activeDocument() {
@@ -248,10 +311,10 @@ public class ScriptLogLite {
 
         DocumentTab addDocument(ReplayLog loaded, Path path) {
             int id = ++sequence;
-            LoggingFilter filter = new LoggingFilter(new PrintWriter(java.io.OutputStream.nullOutputStream()));
+            LoggingFilter filter = new LoggingFilter();
             filter.automaticPath = id == 1 ? LOG_PATH
                     : Path.of("document-filter-" + java.util.UUID.randomUUID() + ".json");
-            filter.write("session initialText=\"\"");
+            filter.startSession("");
             DocumentTab document = new DocumentTab(this, filter, "Untitled " + id);
             if (loaded != null) restoreLog(document.text, filter, loaded);
             document.savedPath = path;
@@ -331,8 +394,10 @@ public class ScriptLogLite {
             } catch (Exception exception) { showError(frame, exception); }
         }
 
-        boolean save(DocumentTab document, boolean saveAs) {
-            if (document == null) return false;
+        boolean save(DocumentTab document, boolean saveAs) { return save(document, saveAs, () -> { }); }
+
+        boolean save(DocumentTab document, boolean saveAs, Runnable afterSave) {
+            if (document == null || document.saving) return false;
             Path path = document.savedPath;
             if (saveAs || path == null) {
                 chooser.setSelectedFile(path == null ? new java.io.File("saved-document.json") : path.toFile());
@@ -350,25 +415,51 @@ public class ScriptLogLite {
                         throw new IOException("Choose a filename other than an active automatic log.");
                     }
                 }
-                document.filter.save(path);
-                document.savedPath = path;
-                document.savedEntries = document.filter.entries.size();
-                document.updateTitle();
-                status.setText("Saved " + path.toAbsolutePath());
+                final Path target = path;
+                SaveSnapshot snapshot = document.filter.snapshot();
+                document.saving = true;
+                status.setText("Saving " + target.toAbsolutePath() + "…");
+                saver.named(snapshot, target, exception -> {
+                    document.saving = false;
+                    if (exception != null) {
+                        closeAllRequested = exitRequested = false;
+                        showError(frame, exception);
+                        return;
+                    }
+                    document.savedPath = target;
+                    // Edits recorded after the snapshot must remain marked as unsaved.
+                    document.savedEntries = snapshot.events.size();
+                    document.updateTitle();
+                    status.setText("Saved " + target.toAbsolutePath());
+                    afterSave.run();
+                });
                 return true;
             } catch (Exception exception) { showError(frame, exception); return false; }
         }
 
         boolean closeDocument(DocumentTab document) {
+            if (document.saving) {
+                status.setText("Saving " + document.title + " — close when saving finishes");
+                closeAllRequested = exitRequested = false;
+                return false;
+            }
             if (document.filter.entries.size() != document.savedEntries) {
                 int answer = JOptionPane.showConfirmDialog(frame,
                         "Save changes to " + document.title + "?", "Close Document",
                         JOptionPane.YES_NO_CANCEL_OPTION);
-                if (answer == JOptionPane.CANCEL_OPTION || answer == JOptionPane.CLOSED_OPTION) return false;
-                if (answer == JOptionPane.YES_OPTION && !save(document, false)) return false;
+                if (answer == JOptionPane.CANCEL_OPTION || answer == JOptionPane.CLOSED_OPTION) {
+                    closeAllRequested = exitRequested = false;
+                    return false;
+                }
+                if (answer == JOptionPane.YES_OPTION) {
+                    boolean started = save(document, false, () -> {
+                        if (closeDocument(document) && closeAllRequested) closeAll();
+                    });
+                    if (!started) closeAllRequested = exitRequested = false;
+                    return false; // Removal happens only after the save succeeds.
+                }
             }
-            try { document.filter.saveAutomatic(); }
-            catch (Exception exception) { showError(frame, exception); return false; }
+            saver.automatic(document.filter);
             documents.remove(document);
             tabs.remove(document);
             document.filter.onRecord = () -> { };
@@ -382,16 +473,22 @@ public class ScriptLogLite {
         }
 
         boolean closeAll() {
+            closeAllRequested = true;
             while (tabs.getTabCount() > 0) {
                 if (!closeTab(tabs.getComponentAt(0))) return false;
+            }
+            closeAllRequested = false;
+            if (exitRequested) {
+                autosave.stop();
+                if (frame != null) frame.dispose();
+                exitRequested = false;
             }
             return true;
         }
 
         void exit() {
-            if (!closeAll()) return;
-            autosave.stop();
-            if (frame != null) frame.dispose();
+            exitRequested = true;
+            closeAll();
         }
 
         void cycleTab(int direction) {
@@ -423,6 +520,7 @@ public class ScriptLogLite {
         final String untitled;
         Path savedPath;
         int savedEntries;
+        boolean saving;
         String title;
 
         DocumentTab(TabbedApplication owner, LoggingFilter filter, String untitled) {
@@ -463,7 +561,7 @@ public class ScriptLogLite {
             Point position = scroll.getViewport().getViewPosition();
             if (!position.equals(previous[0])) {
                 previous[0] = new Point(position);
-                filter.write("scrollChange x=" + position.x + " y=" + position.y);
+                filter.append(new ScrollLogEvent(filter.timestamp(), position.x, position.y));
             }
         });
         return scroll;
@@ -504,11 +602,9 @@ public class ScriptLogLite {
             Instant originalStart = loaded.states.get(0).time;
             Instant originalEnd = loaded.states.get(loaded.states.size() - 1).time;
             Instant newStart = Instant.now().minus(Duration.between(originalStart, originalEnd));
-            List<String> rebased = new ArrayList<>();
-            for (String line : loaded.lines) {
-                int separator = line.indexOf(' ');
-                Instant time = Instant.parse(line.substring(0, separator));
-                rebased.add(newStart.plus(Duration.between(originalStart, time)) + line.substring(separator));
+            List<LogEvent> rebased = new ArrayList<>();
+            for (LogEvent event : loaded.events) {
+                rebased.add(event.at(newStart.plus(Duration.between(originalStart, event.time))));
             }
             ReplayLog adjusted = ReplayLog.parse(rebased);
             adjusted.metadata.putAll(loaded.metadata);
@@ -525,16 +621,14 @@ public class ScriptLogLite {
         } finally {
             filter.restoring = false;
         }
-        filter.entries.clear();
-        filter.entries.addAll(loaded.lines);
-        filter.metadata.clear();
-        filter.metadata.putAll(loaded.metadata);
-        filter.dirty = true;
-        filter.lastTime = state.time;
-        // The automatic audit file starts a checkpoint; saved logs retain the entire history.
-        filter.audit(Instant.now() + " session initialText=" + LoggingFilter.quote(state.text));
-        filter.audit(Instant.now() + " caretUpdate dot=" + state.dot + " mark=" + state.mark);
-        filter.audit(Instant.now() + " scrollChange x=" + state.scrollX + " y=" + state.scrollY);
+        synchronized (filter) {
+            filter.entries.clear();
+            filter.entries.addAll(loaded.events);
+            filter.metadata.clear();
+            filter.metadata.putAll(loaded.metadata);
+            filter.changed();
+            filter.lastTime = state.time;
+        }
     }
 
     private static JTextArea createTextArea(LoggingFilter filter) {
@@ -551,7 +645,7 @@ public class ScriptLogLite {
                     Point location = text.isShowing() ? text.getLocationOnScreen() : text.getLocation();
                     filter.metadata.put("TextAreaX", location.x);
                     filter.metadata.put("TextAreaY", location.y);
-                    filter.dirty = true;
+                    filter.changed();
                 }
             }
             @Override
@@ -588,163 +682,391 @@ public class ScriptLogLite {
         void run() throws BadLocationException;
     }
 
+    enum EventType {
+        SESSION("session", 0), INSERT("insertString", 101), REMOVE("remove", 102),
+        REPLACE("replace", 103), CARET("caretUpdate", 104), SCROLL("scrollChange", 107),
+        KEY_PRESSED("keyPressed", 207), KEY_RELEASED("keyReleased", 208);
+        final String name;
+        final int id;
+        EventType(String name, int id) { this.name = name; this.id = id; }
+        static EventType named(String name) {
+            for (EventType type : values()) if (type.name.equals(name)) return type;
+            throw new IllegalArgumentException("Unknown event " + name);
+        }
+    }
+
+    /** Immutable values; recording never formats or parses a log line. */
+    static abstract class LogEvent {
+        final Instant time;
+        final EventType type;
+        LogEvent(Instant time, EventType type) { this.time = time; this.type = type; }
+        abstract LogEvent at(Instant time);
+        String description() { return type.name; }
+    }
+
+    static final class SessionEvent extends LogEvent {
+        final String initialText;
+        SessionEvent(Instant time, String initialText) { super(time, EventType.SESSION); this.initialText = initialText; }
+        LogEvent at(Instant time) { return new SessionEvent(time, initialText); }
+    }
+
+    static final class EditEvent extends LogEvent {
+        final int offset;
+        final String removed, inserted; // null inserted is preserved for JSON str:null
+        EditEvent(Instant time, EventType type, int offset, String removed, String inserted) {
+            super(time, type);
+            this.offset = offset; this.removed = removed; this.inserted = inserted;
+        }
+        String replacement() { return inserted == null ? "" : inserted; }
+        void apply(StringBuilder text) { replace(text, removed, replacement()); }
+        void undo(StringBuilder text) { replace(text, replacement(), removed); }
+        private void replace(StringBuilder text, String expected, String replacement) {
+            if (offset < 0 || offset > text.length() - expected.length()
+                    || !text.substring(offset, offset + expected.length()).equals(expected)) {
+                throw new IllegalArgumentException("Edit does not match document at offset " + offset);
+            }
+            text.replace(offset, offset + expected.length(), replacement);
+        }
+        LogEvent at(Instant time) { return new EditEvent(time, type, offset, removed, inserted); }
+        String description() { return type.name + " offset=" + offset + " length=" + removed.length(); }
+    }
+
+    static final class CaretLogEvent extends LogEvent {
+        final int dot, mark;
+        CaretLogEvent(Instant time, int dot, int mark) { super(time, EventType.CARET); this.dot = dot; this.mark = mark; }
+        LogEvent at(Instant time) { return new CaretLogEvent(time, dot, mark); }
+        String description() { return type.name + " dot=" + dot + " mark=" + mark; }
+    }
+
+    static final class ScrollLogEvent extends LogEvent {
+        final int x, y;
+        ScrollLogEvent(Instant time, int x, int y) { super(time, EventType.SCROLL); this.x = x; this.y = y; }
+        LogEvent at(Instant time) { return new ScrollLogEvent(time, x, y); }
+        String description() { return type.name + " viewX=" + x + " viewY=" + y; }
+    }
+
+    static final class KeyLogEvent extends LogEvent {
+        final int keyCode;
+        final String keyText, keyChar, modifiersText;
+        final Integer modifiers, keyLocation;
+        KeyLogEvent(Instant time, EventType type, int keyCode, String keyText, String keyChar,
+                Integer modifiers, String modifiersText, Integer keyLocation) {
+            super(time, type); this.keyCode = keyCode; this.keyText = keyText; this.keyChar = keyChar;
+            this.modifiers = modifiers; this.modifiersText = modifiersText; this.keyLocation = keyLocation;
+        }
+        LogEvent at(Instant time) {
+            return new KeyLogEvent(time, type, keyCode, keyText, keyChar, modifiers, modifiersText, keyLocation);
+        }
+        String description() { return type.name + " keyCode=" + keyCode; }
+    }
+
+    static final class SaveSnapshot {
+        final List<LogEvent> events;
+        final Map<String, Object> metadata;
+        final long revision;
+        SaveSnapshot(List<LogEvent> events, Map<String, Object> metadata, long revision) {
+            this.events = List.copyOf(events);
+            this.metadata = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(metadata));
+            this.revision = revision;
+        }
+        void save(Path path) throws IOException {
+            Path target = path.toAbsolutePath();
+            Path temporary = Files.createTempFile(target.getParent(), ".saved-log-", ".tmp");
+            try {
+                try (java.io.Writer writer = Files.newBufferedWriter(temporary, StandardCharsets.UTF_8)) {
+                    JsonLog.write(events, metadata, writer);
+                    writer.write('\n');
+                }
+                try {
+                    Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                } catch (AtomicMoveNotSupportedException exception) {
+                    Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+                }
+            } finally { Files.deleteIfExists(temporary); }
+        }
+    }
+
+    /** Single writer preserves ordering; pending autosaves coalesce to the latest revision per document. */
+    static final class BackgroundSaver implements AutoCloseable {
+        final java.util.concurrent.ExecutorService writer = java.util.concurrent.Executors.newSingleThreadExecutor(task -> {
+            Thread thread = new Thread(task, "scriptloglite-save"); thread.setDaemon(true); return thread;
+        });
+        final Map<LoggingFilter, SaveSnapshot> pending = new LinkedHashMap<>();
+        boolean draining, closing;
+        final java.util.function.Consumer<Exception> onError;
+        BackgroundSaver(java.util.function.Consumer<Exception> onError) { this.onError = onError; }
+
+        synchronized void automatic(LoggingFilter filter) {
+            if (closing) throw new IllegalStateException("Save worker is closed");
+            synchronized (filter) {
+                if (!filter.dirty || filter.entries.isEmpty()) return;
+                pending.put(filter, filter.snapshot());
+            }
+            if (!draining) {
+                draining = true;
+                writer.execute(this::drain);
+            }
+        }
+        private void drain() {
+            while (true) {
+                Map<LoggingFilter, SaveSnapshot> batch;
+                synchronized (this) {
+                    batch = new LinkedHashMap<>(pending);
+                    pending.clear();
+                }
+                for (Map.Entry<LoggingFilter, SaveSnapshot> entry : batch.entrySet()) {
+                    LoggingFilter filter = entry.getKey();
+                    SaveSnapshot snapshot = entry.getValue();
+                    try {
+                        synchronized (filter) { if (snapshot.revision <= filter.automaticRevision) continue; }
+                        snapshot.save(filter.automaticPath);
+                        filter.savedAutomatically(snapshot.revision);
+                    } catch (Exception exception) { report(exception); }
+                }
+                synchronized (this) {
+                    if (pending.isEmpty()) { draining = false; return; }
+                    if (!closing) {
+                        // Yield to explicit Save requests already waiting in the executor.
+                        writer.execute(this::drain);
+                        return;
+                    }
+                }
+                // At shutdown, drain the remainder without submitting new executor tasks.
+            }
+        }
+        void named(SaveSnapshot snapshot, Path path, java.util.function.Consumer<Exception> completion) {
+            writer.execute(() -> {
+                Exception failure = null;
+                try { snapshot.save(path); } catch (Exception exception) { failure = exception; }
+                final Exception result = failure;
+                SwingUtilities.invokeLater(() -> completion.accept(result));
+            });
+        }
+        void report(Exception exception) {
+            System.err.println("Log save failed: " + exception.getMessage());
+            SwingUtilities.invokeLater(() -> onError.accept(exception));
+        }
+        java.util.concurrent.Future<?> flush() {
+            java.util.concurrent.CompletableFuture<Void> complete = new java.util.concurrent.CompletableFuture<>();
+            writer.execute(new Runnable() {
+                public void run() {
+                    synchronized (BackgroundSaver.this) {
+                        if (!draining && pending.isEmpty()) complete.complete(null);
+                        else writer.execute(this);
+                    }
+                }
+            });
+            return complete;
+        }
+        public void close() {
+            synchronized (this) { closing = true; writer.shutdown(); }
+            try {
+                while (!writer.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS)) { }
+            } catch (InterruptedException exception) { Thread.currentThread().interrupt(); }
+        }
+    }
+
     public static class LoggingFilter extends DocumentFilter {
-        private final PrintWriter log;
-        final List<String> entries = new ArrayList<>();
+        final List<LogEvent> entries = new ArrayList<>();
         final Map<String, Object> metadata = new LinkedHashMap<>();
         boolean dirty = true;
+        long revision, automaticRevision = -1;
         Path automaticPath = LOG_PATH;
         Runnable onRecord = () -> { };
         boolean restoring;
         Instant lastTime = Instant.MIN;
 
-        synchronized void save(Path path) throws IOException {
-            if (path.toAbsolutePath().normalize().equals(automaticPath.toAbsolutePath().normalize())
-                    || (Files.exists(path) && Files.exists(automaticPath) && Files.isSameFile(path, automaticPath))) {
-                throw new IOException("Choose a different filename from the active automatic log: " + automaticPath);
-            }
-            saveJson(path);
-        }
-
-        synchronized void saveAutomatic() throws IOException {
-            if (!dirty || entries.isEmpty()) return;
-            saveJson(automaticPath);
-            dirty = false;
-        }
-
-        private void saveJson(Path path) throws IOException {
-            String json = JsonLog.export(new ArrayList<>(entries), metadata);
-            Path target = path.toAbsolutePath();
-            Path temporary = Files.createTempFile(target.getParent(), ".saved-log-", ".tmp");
-            try {
-                Files.writeString(temporary, json + "\n", StandardCharsets.UTF_8);
-                try {
-                    Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE,
-                            StandardCopyOption.REPLACE_EXISTING);
-                } catch (AtomicMoveNotSupportedException exception) {
-                    Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
-                }
-            } finally {
-                Files.deleteIfExists(temporary);
-            }
-        }
-
-        public LoggingFilter(PrintWriter log) {
-            this.log = log;
-            metadata.put("startTime", System.nanoTime());
-        }
-
-        @Override
-        public void insertString(FilterBypass bypass, int offset, String string,
-                AttributeSet attributes) throws BadLocationException {
-            record("insertString", offset, 0, string, attributes, "");
-            super.insertString(bypass, offset, string, attributes);
-        }
-
-        @Override
-        public void replace(FilterBypass bypass, int offset, int length, String text,
-                AttributeSet attributes) throws BadLocationException {
-            record("replace", offset, length, text, attributes,
-                    bypass.getDocument().getText(offset, length));
-            super.replace(bypass, offset, length, text, attributes);
-        }
-
-        @Override
-        public void remove(FilterBypass bypass, int offset, int length)
-                throws BadLocationException {
-            record("remove", offset, length, null, null,
-                    bypass.getDocument().getText(offset, length));
-            super.remove(bypass, offset, length);
-        }
-
-        public void recordCaret(CaretEvent event) {
-            write("caretUpdate dot=" + event.getDot() + " mark=" + event.getMark()
-                    + " selectionStart=" + Math.min(event.getDot(), event.getMark())
-                    + " selectionEnd=" + Math.max(event.getDot(), event.getMark()));
-        }
-
-        public void recordKey(String method, KeyEvent event) {
-            write(method + " keyCode=" + event.getKeyCode()
-                    + " keyText=" + quote(KeyEvent.getKeyText(event.getKeyCode()))
-                    + " keyChar=" + (event.getKeyChar() == KeyEvent.CHAR_UNDEFINED
-                            ? "undefined" : quote(String.valueOf(event.getKeyChar())))
-                    + " modifiers=" + event.getModifiersEx()
-                    + " modifiersText=" + quote(KeyEvent.getModifiersExText(event.getModifiersEx()))
-                    + " keyLocation=" + event.getKeyLocation());
-        }
-
-        private void record(String method, int offset, int length,
-                String text, AttributeSet attributes, String oldText) {
-            write(method + " offset=" + offset
-                    + " length=" + length + " text=" + quote(text) + " oldText=" + quote(oldText)
-                    + " attributes=" + quote(attributes == null ? null : attributes.toString()));
-        }
-
-        private synchronized void write(String message) {
-            if (restoring) return;
+        public LoggingFilter() { metadata.put("startTime", System.nanoTime()); }
+        synchronized Instant timestamp() {
             Instant now = Instant.now();
-            if (now.isBefore(lastTime)) now = lastTime;
-            lastTime = now;
-            String entry = now + " " + message;
-            audit(entry);
-            entries.add(entry);
-            dirty = true;
+            return now.isBefore(lastTime) ? lastTime : now;
+        }
+        synchronized void append(LogEvent event) {
+            if (restoring) return;
+            if (event.time.isBefore(lastTime)) event = event.at(lastTime);
+            entries.add(event);
+            lastTime = event.time;
+            changed();
             onRecord.run();
         }
-
-        private void audit(String entry) {
-            log.println(entry);
-            if (log.checkError()) {
-                throw new IllegalStateException("Unable to write " + automaticPath);
+        synchronized void changed() { dirty = true; revision++; }
+        void startSession(String text) { append(new SessionEvent(timestamp(), text)); }
+        synchronized SaveSnapshot snapshot() { return new SaveSnapshot(entries, metadata, revision); }
+        void save(Path path) throws IOException {
+            if (path.toAbsolutePath().normalize().equals(automaticPath.toAbsolutePath().normalize())
+                    || (Files.exists(path) && Files.exists(automaticPath) && Files.isSameFile(path, automaticPath))) {
+                throw new IOException("Choose another filename than the active automatic log");
             }
+            snapshot().save(path);
         }
-
-        private static String quote(String text) {
-            if (text == null) {
-                return "null";
-            }
-            return "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"")
-                    .replace("\n", "\\n").replace("\r", "\\r")
-                    .replace("\t", "\\t") + "\"";
+        // Synchronous only for command-line demo/tests, never called by GUI save actions.
+        void saveAutomatic() throws IOException {
+            SaveSnapshot snapshot;
+            synchronized (this) { if (!dirty || entries.isEmpty()) return; snapshot = snapshot(); }
+            snapshot.save(automaticPath);
+            savedAutomatically(snapshot.revision);
         }
+        synchronized void savedAutomatically(long savedRevision) {
+            automaticRevision = Math.max(automaticRevision, savedRevision);
+            if (revision == savedRevision) dirty = false;
+        }
+        @Override
+        public void insertString(FilterBypass bypass, int offset, String string, AttributeSet attributes)
+                throws BadLocationException {
+            // Validate before recording an edit that Swing would reject.
+            bypass.getDocument().getText(offset, 0);
+            append(new EditEvent(timestamp(), EventType.INSERT, offset, "", string));
+            super.insertString(bypass, offset, string, attributes);
+        }
+        @Override
+        public void replace(FilterBypass bypass, int offset, int length, String text, AttributeSet attributes)
+                throws BadLocationException {
+            String old = bypass.getDocument().getText(offset, length);
+            append(new EditEvent(timestamp(), EventType.REPLACE, offset, old, text));
+            super.replace(bypass, offset, length, text, attributes);
+        }
+        @Override
+        public void remove(FilterBypass bypass, int offset, int length) throws BadLocationException {
+            String old = bypass.getDocument().getText(offset, length);
+            append(new EditEvent(timestamp(), EventType.REMOVE, offset, old, null));
+            super.remove(bypass, offset, length);
+        }
+        public void recordCaret(CaretEvent event) {
+            append(new CaretLogEvent(timestamp(), event.getDot(), event.getMark()));
+        }
+        public void recordKey(String method, KeyEvent event) {
+            append(new KeyLogEvent(timestamp(), EventType.named(method), event.getKeyCode(),
+                    KeyEvent.getKeyText(event.getKeyCode()), event.getKeyChar() == KeyEvent.CHAR_UNDEFINED
+                    ? "undefined" : String.valueOf(event.getKeyChar()), event.getModifiersEx(),
+                    KeyEvent.getModifiersExText(event.getModifiersEx()), event.getKeyLocation()));
+        }
+        static String quote(String text) { return text == null ? "null" : Json.quote(text); }
     }
 
-    /** Immutable state after a recorded event; snapshots make reverse steps exact. */
+    /** Transient state returned for display/testing; full text is never retained per event. */
     static class ReplayState {
         final Instant time;
         final String text;
         final int dot, mark, scrollX, scrollY;
         final String description;
         final boolean edit;
-
-        ReplayState(Instant time, String text, int dot, int mark, int scrollX, int scrollY,
-                String description, boolean edit) {
-            this.time = time;
-            this.text = text;
-            this.dot = dot;
-            this.mark = mark;
-            this.scrollX = scrollX;
-            this.scrollY = scrollY;
-            this.description = description;
-            this.edit = edit;
+        ReplayState(LogEvent event, String text, ViewState view) {
+            time = event.time; this.text = text; dot = view.dot; mark = view.mark;
+            scrollX = view.x; scrollY = view.y; description = event.description(); edit = event instanceof EditEvent;
         }
+    }
+    static final class ViewState {
+        final int dot, mark, x, y;
+        ViewState(int dot, int mark, int x, int y) { this.dot = dot; this.mark = mark; this.x = x; this.y = y; }
     }
 
     static class ReplayLog {
-        final List<ReplayState> states = new ArrayList<>();
-        final List<String> lines = new ArrayList<>();
+        final List<LogEvent> events;
         final Map<String, Object> metadata = new LinkedHashMap<>();
-        // Each boundary includes an edit and the caret/key events following it.
+        final List<ViewState> views = new ArrayList<>();
         final List<Integer> boundaries = new ArrayList<>();
-        static final Pattern FIELD = Pattern.compile(
-                "(\\w+)=(\"(?:\\\\.|[^\"\\\\])*+\"|\\S+)");
+        final java.util.NavigableMap<Integer, String> checkpoints = new java.util.TreeMap<>();
+        final String initialText, finalText;
+        // Compatibility convenience: get() materializes one state, not an array of text snapshots.
+        final List<ReplayState> states = new java.util.AbstractList<ReplayState>() {
+            public int size() { return events.size(); }
+            public ReplayState get(int index) { ReplayCursor cursor = new ReplayCursor(ReplayLog.this); cursor.seek(index); return cursor.state(); }
+        };
+        static final Pattern FIELD = Pattern.compile("(\\w+)=(\"(?:\\\\.|[^\"\\\\])*+\"|\\S+)");
 
+        ReplayLog(List<LogEvent> input) {
+            if (input.isEmpty() || !(input.get(0) instanceof SessionEvent)) {
+                throw new IllegalArgumentException("Missing session");
+            }
+            events = List.copyOf(input);
+            initialText = ((SessionEvent) events.get(0)).initialText;
+            StringBuilder text = new StringBuilder(initialText);
+            int dot = 0, mark = 0, x = 0, y = 0, edits = 0;
+            Instant previous = events.get(0).time;
+            checkpoints.put(0, initialText);
+            boundaries.add(0);
+            for (int i = 0; i < events.size(); i++) {
+                LogEvent event = events.get(i);
+                try {
+                    if (event.time.isBefore(previous)) throw new IllegalArgumentException("timestamps run backwards");
+                    previous = event.time;
+                    if (event instanceof EditEvent) {
+                        EditEvent edit = (EditEvent) event;
+                        if (edit.type == EventType.INSERT && !edit.removed.isEmpty()) {
+                            throw new IllegalArgumentException("insertString cannot remove text");
+                        }
+                        edit.apply(text);
+                        dot = Math.min(dot, text.length()); mark = Math.min(mark, text.length());
+                        if (++edits % 256 == 0) checkpoints.put(i, text.toString());
+                        if (boundaries.size() > 1) boundaries.set(boundaries.size() - 1, i - 1);
+                        boundaries.add(i);
+                    } else if (event instanceof CaretLogEvent) {
+                        CaretLogEvent caret = (CaretLogEvent) event;
+                        dot = caret.dot; mark = caret.mark;
+                        if (dot < 0 || mark < 0 || dot > text.length() || mark > text.length()) {
+                            throw new IllegalArgumentException("caret outside document");
+                        }
+                    } else if (event instanceof ScrollLogEvent) {
+                        ScrollLogEvent scroll = (ScrollLogEvent) event; x = scroll.x; y = scroll.y;
+                        if (x < 0 || y < 0) throw new IllegalArgumentException("negative scroll position");
+                    } else if (i != 0 && event instanceof SessionEvent) {
+                        throw new IllegalArgumentException("unexpected session marker");
+                    }
+                    views.add(new ViewState(dot, mark, x, y));
+                } catch (RuntimeException exception) {
+                    throw new IllegalArgumentException("Invalid replay event " + (i + 1) + ": " + exception.getMessage(), exception);
+                }
+            }
+            finalText = text.toString();
+            if (boundaries.size() > 1) boundaries.set(boundaries.size() - 1, events.size() - 1);
+        }
+
+        static ReplayLog parse(List<?> input) {
+            if (!input.isEmpty() && input.get(0) instanceof LogEvent) {
+                List<LogEvent> events = new ArrayList<>();
+                for (Object item : input) events.add((LogEvent) item);
+                return new ReplayLog(events);
+            }
+            List<LogEvent> events = new ArrayList<>();
+            for (Object item : input) events.add(legacyEvent((String) item));
+            return new ReplayLog(events);
+        }
+        static LogEvent legacyEvent(String line) {
+            String[] parts = line.split(" ", 3);
+            Instant time = Instant.parse(parts[0]);
+            EventType type = EventType.named(parts[1]);
+            Map<String, String> fields = new HashMap<>();
+            Matcher matcher = FIELD.matcher(parts.length > 2 ? parts[2] : "");
+            while (matcher.find()) fields.put(matcher.group(1), decode(matcher.group(2)));
+            switch (type) {
+                case SESSION: return new SessionEvent(time, required(fields, "initialText"));
+                case INSERT: case REMOVE: case REPLACE:
+                    String old = required(fields, "oldText");
+                    if (old.length() != Integer.parseInt(required(fields, "length"))) {
+                        throw new IllegalArgumentException("oldText length mismatch");
+                    }
+                    return new EditEvent(time, type, Integer.parseInt(required(fields, "offset")), old,
+                            type == EventType.REMOVE ? null : fields.get("text"));
+                case CARET: return new CaretLogEvent(time, Integer.parseInt(required(fields, "dot")), Integer.parseInt(required(fields, "mark")));
+                case SCROLL: return new ScrollLogEvent(time, Integer.parseInt(required(fields, "x")), Integer.parseInt(required(fields, "y")));
+                default: return new KeyLogEvent(time, type, Integer.parseInt(required(fields, "keyCode")),
+                        fields.get("keyText"), fields.get("keyChar"), optionalInteger(fields, "modifiers"),
+                        fields.get("modifiersText"), optionalInteger(fields, "keyLocation"));
+            }
+        }
+        static Integer optionalInteger(Map<String, String> fields, String key) {
+            return fields.containsKey(key) ? Integer.valueOf(fields.get(key)) : null;
+        }
+        static String required(Map<String, String> fields, String key) {
+            String value = fields.get(key);
+            if (value == null) throw new IllegalArgumentException("missing " + key);
+            return value;
+        }
+        static String decode(String value) { return value.startsWith("\"") ? (String) new Json(value).parse() : value.equals("null") ? null : value; }
         static ReplayLog load(Path path, int session) throws Exception {
             String content = Files.readString(path, StandardCharsets.UTF_8);
             if (content.stripLeading().startsWith("[")) {
-                if (session != -1 && session != 1) {
-                    throw new IllegalArgumentException("A JSON log contains one session; choose session 1.");
-                }
+                if (session != -1 && session != 1) throw new IllegalArgumentException("JSON holds one session");
                 return JsonLog.load(content);
             }
             List<List<String>> sessions = new ArrayList<>();
@@ -753,135 +1075,49 @@ public class ScriptLogLite {
                 if (line.matches("\\S+ session .*")) sessions.add(new ArrayList<>());
                 if (!sessions.isEmpty()) sessions.get(sessions.size() - 1).add(line);
             }
-            if (sessions.isEmpty()) {
-                throw new IllegalArgumentException("This log has no session marker. "
-                        + "Record a new session with this version to enable replay.");
-            }
+            if (sessions.isEmpty()) throw new IllegalArgumentException("Log has no session marker");
             int index = session == -1 ? sessions.size() - 1 : session - 1;
-            if (index < 0 || index >= sessions.size()) {
-                throw new IllegalArgumentException("Session must be between 1 and " + sessions.size());
-            }
+            if (index < 0 || index >= sessions.size()) throw new IllegalArgumentException("Invalid session number");
             return parse(sessions.get(index));
         }
+        int nextEdit(int position) { for (int boundary : boundaries) if (boundary > position) return boundary; return position; }
+        int previousEdit(int position) { for (int i = boundaries.size() - 1; i >= 0; i--) if (boundaries.get(i) < position) return boundaries.get(i); return 0; }
+    }
 
-        static ReplayLog parse(List<String> lines) {
-            ReplayLog result = new ReplayLog();
-            result.lines.addAll(lines);
-            String text = "";
-            int dot = 0, mark = 0, scrollX = 0, scrollY = 0;
-            Instant previous = null;
-            for (int i = 0; i < lines.size(); i++) {
-                String line = lines.get(i);
-                try {
-                    String[] parts = line.split(" ", 3);
-                    Instant time = Instant.parse(parts[0]);
-                    if (previous != null && time.isBefore(previous)) {
-                        throw new IllegalArgumentException("timestamps run backwards");
-                    }
-                    previous = time;
-                    String method = parts[1];
-                    Map<String, String> fields = new HashMap<>();
-                    Matcher matcher = FIELD.matcher(parts.length == 3 ? parts[2] : "");
-                    while (matcher.find()) fields.put(matcher.group(1), decode(matcher.group(2)));
-                    boolean edit = false;
-                    if (i == 0) {
-                        if (!method.equals("session")) throw new IllegalArgumentException("missing session");
-                        text = required(fields, "initialText");
-                    } else if (method.equals("insertString") || method.equals("replace")
-                            || method.equals("remove")) {
-                        edit = true;
-                        int offset = Integer.parseInt(required(fields, "offset"));
-                        int length = Integer.parseInt(required(fields, "length"));
-                        String old = required(fields, "oldText");
-                        String replacement = method.equals("remove") ? "" : fields.get("text");
-                        if (replacement == null) replacement = "";
-                        if (offset < 0 || length < 0 || offset > text.length() - length
-                                || !text.substring(offset, offset + length).equals(old)) {
-                            throw new IllegalArgumentException("edit does not match the document");
-                        }
-                        text = text.substring(0, offset) + replacement + text.substring(offset + length);
-                        dot = Math.min(dot, text.length());
-                        mark = Math.min(mark, text.length());
-                    } else if (method.equals("caretUpdate")) {
-                        dot = Integer.parseInt(required(fields, "dot"));
-                        mark = Integer.parseInt(required(fields, "mark"));
-                        if (dot < 0 || mark < 0 || dot > text.length() || mark > text.length()) {
-                            throw new IllegalArgumentException("caret outside document");
-                        }
-                    } else if (method.equals("scrollChange")) {
-                        scrollX = Integer.parseInt(required(fields, "x"));
-                        scrollY = Integer.parseInt(required(fields, "y"));
-                        if (scrollX < 0 || scrollY < 0) {
-                            throw new IllegalArgumentException("negative scroll position");
-                        }
-                    } else if (!method.equals("keyPressed") && !method.equals("keyReleased")) {
-                        throw new IllegalArgumentException("unknown event " + method);
-                    }
-                    result.states.add(new ReplayState(time, text, dot, mark, scrollX, scrollY,
-                            line.substring(parts[0].length() + 1), edit));
-                } catch (RuntimeException exception) {
-                    throw new IllegalArgumentException("Invalid replay event " + (i + 1)
-                            + ": " + exception.getMessage(), exception);
-                }
-            }
-            if (result.states.isEmpty()) throw new IllegalArgumentException("Empty session");
-            result.boundaries.add(0);
-            for (int i = 1; i < result.states.size(); i++) {
-                if (result.states.get(i).edit) {
-                    if (result.boundaries.size() > 1) {
-                        result.boundaries.set(result.boundaries.size() - 1, i - 1);
-                    }
-                    result.boundaries.add(i);
-                }
-            }
-            if (result.boundaries.size() > 1) {
-                result.boundaries.set(result.boundaries.size() - 1, result.states.size() - 1);
-            }
-            return result;
+    /** One mutable text buffer: edits apply forward and undo in reverse order. */
+    static final class ReplayCursor {
+        final ReplayLog log;
+        final StringBuilder text;
+        String cachedText;
+        int position;
+        ReplayCursor(ReplayLog log) {
+            this.log = log; text = new StringBuilder(log.initialText); cachedText = log.initialText;
         }
-
-        static String required(Map<String, String> fields, String key) {
-            String value = fields.get(key);
-            if (value == null) throw new IllegalArgumentException("missing " + key);
-            return value;
-        }
-
-        static String decode(String value) {
-            if (value.equals("null")) return null;
-            if (!value.startsWith("\"")) return value;
-            StringBuilder decoded = new StringBuilder();
-            for (int i = 1; i < value.length() - 1; i++) {
-                char c = value.charAt(i);
-                if (c == '\\') {
-                    c = value.charAt(++i);
-                    switch (c) {
-                        case 'n': c = '\n'; break;
-                        case 'r': c = '\r'; break;
-                        case 't': c = '\t'; break;
-                        case '\\': case '"': break;
-                        default: throw new IllegalArgumentException("unknown escape");
-                    }
-                }
-                decoded.append(c);
+        void seek(int target) {
+            if (target < 0 || target >= log.events.size()) throw new IndexOutOfBoundsException("Replay position " + target);
+            Map.Entry<Integer, String> checkpoint = log.checkpoints.floorEntry(target);
+            if (Math.abs(target - position) > target - checkpoint.getKey()) {
+                text.setLength(0); text.append(checkpoint.getValue());
+                cachedText = checkpoint.getValue(); position = checkpoint.getKey();
             }
-            return decoded.toString();
-        }
-
-        int nextEdit(int position) {
-            for (int boundary : boundaries) if (boundary > position) return boundary;
-            return position;
-        }
-
-        int previousEdit(int position) {
-            for (int i = boundaries.size() - 1; i >= 0; i--) {
-                if (boundaries.get(i) < position) return boundaries.get(i);
+            while (position < target) {
+                LogEvent event = log.events.get(++position);
+                if (event instanceof EditEvent) { ((EditEvent) event).apply(text); cachedText = null; }
             }
-            return 0;
+            while (position > target) {
+                LogEvent event = log.events.get(position--);
+                if (event instanceof EditEvent) { ((EditEvent) event).undo(text); cachedText = null; }
+            }
+        }
+        ReplayState state() {
+            if (cachedText == null) cachedText = text.toString();
+            return new ReplayState(log.events.get(position), cachedText, log.views.get(position));
         }
     }
 
     static class ReplayWindow {
         final ReplayLog log;
+        final ReplayCursor cursor;
         final JTextArea text = new JTextArea(12, 50);
         final JScrollPane scroll = new JScrollPane(text);
         final JLabel status = new JLabel();
@@ -896,6 +1132,7 @@ public class ScriptLogLite {
 
         ReplayWindow(ReplayLog log) {
             this.log = log;
+            cursor = new ReplayCursor(log);
             text.setEditable(false);
             speed.setSelectedItem("1");
             timer = new Timer(10, event -> tick());
@@ -928,8 +1165,8 @@ public class ScriptLogLite {
         void advance(long realNanos) {
             elapsedNanos += realNanos * playbackSpeed;
             while (position < log.states.size() - 1) {
-                double gap = Duration.between(log.states.get(position).time,
-                        log.states.get(position + 1).time).toNanos();
+                double gap = Duration.between(log.events.get(position).time,
+                        log.events.get(position + 1).time).toNanos();
                 if (elapsedNanos < gap) break;
                 elapsedNanos -= gap;
                 position++;
@@ -951,7 +1188,8 @@ public class ScriptLogLite {
         }
 
         void render() {
-            ReplayState state = log.states.get(position);
+            cursor.seek(position);
+            ReplayState state = cursor.state();
             if (!text.getText().equals(state.text)) text.setText(state.text);
             text.setCaretPosition(state.mark);
             text.moveCaretPosition(state.dot);
@@ -1052,15 +1290,182 @@ public class ScriptLogLite {
         testScroll();
         testJson();
         testTabs();
+        testReversibleHistory();
+        testBackgroundSaving();
+        testThemes();
         System.out.println("Replay self-test passed");
+    }
+
+    static void testReversibleHistory() {
+        Instant time = Instant.parse("2026-01-01T00:00:00Z");
+        List<LogEvent> events = new ArrayList<>();
+        events.add(new SessionEvent(time, ""));
+        for (int i = 0; i < 2048; i++) {
+            events.add(new EditEvent(time.plusNanos(i * 2L + 1), EventType.INSERT, i, "", "x"));
+            events.add(new CaretLogEvent(time.plusNanos(i * 2L + 2), i + 1, i + 1));
+        }
+        ReplayLog replay = new ReplayLog(events);
+        check(replay.checkpoints.size() == 9, "sparse checkpoints rather than per-edit text snapshots");
+        ReplayCursor cursor = new ReplayCursor(replay);
+        for (int i = 1; i < events.size(); i++) {
+            cursor.seek(i);
+            check(cursor.text.length() == (i + 1) / 2, "incremental forward edits");
+        }
+        for (int i = events.size() - 2; i >= 0; i--) {
+            cursor.seek(i);
+            check(cursor.text.length() == (i + 1) / 2, "incremental reverse edits");
+        }
+        cursor.seek(events.size() - 1);
+        check(cursor.state().text.equals("x".repeat(2048)), "seek across checkpoints");
+        StringBuilder text = new StringBuilder("A😀BC");
+        EditEvent replacement = new EditEvent(time, EventType.REPLACE, 1, "😀B", "\n\"\\");
+        replacement.apply(text);
+        check(text.toString().equals("A\n\"\\C"), "reversible Unicode replacement");
+        replacement.undo(text);
+        check(text.toString().equals("A😀BC"), "replacement inverse");
+        EditEvent remove = new EditEvent(time, EventType.REMOVE, 1, "😀", null);
+        remove.apply(text); remove.undo(text);
+        check(text.toString().equals("A😀BC"), "remove inverse");
+    }
+
+    static void testBackgroundSaving() throws Exception {
+        Path directory = Files.createTempDirectory("background-log-test");
+        java.util.concurrent.CountDownLatch gate = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch busy = new java.util.concurrent.CountDownLatch(1);
+        TabbedApplication[] application = new TabbedApplication[1];
+        DocumentTab[] document = new DocumentTab[1];
+        int[] capturedEntries = new int[1];
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                TabbedApplication app = new TabbedApplication();
+                application[0] = app;
+                DocumentTab tab = app.addDocument(null, null);
+                document[0] = tab;
+                tab.filter.automaticPath = directory.resolve("automatic.json");
+                tab.savedPath = directory.resolve("named.json");
+                app.saver.writer.execute(() -> {
+                    check(!SwingUtilities.isEventDispatchThread(), "save worker is off the EDT");
+                    busy.countDown();
+                    try { gate.await(); }
+                    catch (InterruptedException exception) { Thread.currentThread().interrupt(); }
+                });
+            });
+            check(busy.await(5, java.util.concurrent.TimeUnit.SECONDS), "worker started");
+            SwingUtilities.invokeAndWait(() -> {
+                TabbedApplication app = application[0];
+                DocumentTab tab = document[0];
+                tab.text.setText("snapshot");
+                check(tab.filter.entries.stream().allMatch(event -> event instanceof LogEvent), "typed recording");
+                capturedEntries[0] = tab.filter.entries.size();
+                check(app.save(tab, false), "named save queued without blocking EDT");
+                tab.text.append(" then edited");
+                app.saver.automatic(tab.filter);
+                for (int i = 0; i < 20; i++) {
+                    tab.text.append("!");
+                    app.saver.automatic(tab.filter);
+                }
+                synchronized (app.saver) {
+                    check(app.saver.pending.size() == 1, "autosaves coalesce per document");
+                }
+                check(tab.saving, "manual save pending while EDT keeps editing");
+            });
+            gate.countDown();
+            application[0].saver.flush().get(10, java.util.concurrent.TimeUnit.SECONDS);
+            SwingUtilities.invokeAndWait(() -> {
+                DocumentTab tab = document[0];
+                check(!tab.saving && tab.savedEntries == capturedEntries[0], "saved revision matches snapshot");
+                check(tab.title.endsWith(" *"), "later edits remain unsaved");
+                check(!tab.filter.dirty, "latest automatic revision persisted");
+            });
+            check(ReplayLog.load(directory.resolve("named.json"), -1).finalText.equals("snapshot"),
+                    "named save uses immutable snapshot");
+            String latest = "snapshot then edited" + "!".repeat(20);
+            check(ReplayLog.load(directory.resolve("automatic.json"), -1).finalText.equals(latest),
+                    "coalesced automatic save contains latest edits");
+
+            String previousFile = Files.readString(directory.resolve("named.json"));
+            SaveSnapshot invalid = new SaveSnapshot(List.of(new SessionEvent(Instant.EPOCH, ""),
+                    new EditEvent(Instant.EPOCH, EventType.REMOVE, 0, "missing", null)), Map.of(), 0);
+            java.util.concurrent.CompletableFuture<Exception> failed = new java.util.concurrent.CompletableFuture<>();
+            application[0].saver.named(invalid, directory.resolve("named.json"), exception -> {
+                check(SwingUtilities.isEventDispatchThread(), "save completion runs on EDT");
+                failed.complete(exception);
+            });
+            check(failed.get(10, java.util.concurrent.TimeUnit.SECONDS) != null, "background save failure reported");
+            check(Files.readString(directory.resolve("named.json")).equals(previousFile),
+                    "failed background save preserves existing JSON");
+            try (java.util.stream.Stream<Path> files = Files.list(directory)) {
+                check(files.noneMatch(path -> path.getFileName().toString().startsWith(".saved-log-")),
+                        "failed save removes temporary files");
+            }
+            SwingUtilities.invokeAndWait(() -> {
+                document[0].savedEntries = document[0].filter.entries.size();
+                application[0].closeDocument(document[0]);
+            });
+        } finally {
+            gate.countDown();
+            if (application[0] != null) application[0].saver.close();
+            try (java.util.stream.Stream<Path> files = Files.list(directory)) {
+                for (Path file : (Iterable<Path>) files::iterator) Files.deleteIfExists(file);
+            }
+            Files.deleteIfExists(directory);
+        }
+        System.out.println("Typed events, reversible history, and background saving checks passed");
+    }
+
+    static void testThemes() throws Exception {
+        try {
+            Class.forName(Theme.LIGHT.className);
+            Class.forName(Theme.DARK.className);
+        } catch (ClassNotFoundException exception) {
+            System.out.println("FlatLaf theme checks skipped: dependency not on classpath (use ./run.sh --self-test).");
+            return;
+        }
+        SwingUtilities.invokeAndWait(() -> {
+            javax.swing.LookAndFeel original = javax.swing.UIManager.getLookAndFeel();
+            try {
+                TabbedApplication app = new TabbedApplication();
+                DocumentTab document = app.addDocument(null, null);
+                document.text.setText("Theme switching preserves the document");
+                document.text.setCaretPosition(2);
+                document.text.moveCaretPosition(12);
+                List<LogEvent> before = new ArrayList<>(document.filter.entries);
+                ReplayWindow replay = new ReplayWindow(ReplayLog.parse(before));
+                JPanel replayPanel = replay.panel();
+                app.replays.put(replayPanel, replay);
+                app.addTab(replayPanel, "Replay");
+                replay.seek(replay.log.states.size() - 1);
+                int position = replay.position;
+                for (Theme theme : new Theme[] {Theme.LIGHT, Theme.DARK, Theme.LIGHT}) {
+                    app.changeTheme(theme);
+                    check(javax.swing.UIManager.getLookAndFeel().getClass().getName().equals(theme.className),
+                            "FlatLaf installed: " + theme.label);
+                    check(app.themeChoices.get(theme).isSelected(), "theme menu selection");
+                    check(document.text.getText().equals("Theme switching preserves the document")
+                            && document.text.getCaret().getDot() == 12
+                            && document.text.getCaret().getMark() == 2, "theme preserves text and selection");
+                    check(document.filter.entries.equals(before), "theme creates no log events");
+                    check(replay.position == position, "theme preserves replay position");
+                }
+                app.closeTab(replayPanel);
+            } catch (Exception exception) {
+                throw new RuntimeException(exception);
+            } finally {
+                try { javax.swing.UIManager.setLookAndFeel(original); }
+                catch (Exception exception) { throw new RuntimeException(exception); }
+            }
+        });
+        System.out.println("FlatLaf Light/Dark switching checks passed");
     }
 
     static void testTabs() throws Exception {
         Path directory = Files.createTempDirectory("mdi-document-test");
+        BackgroundSaver[] background = new BackgroundSaver[1];
         try {
             SwingUtilities.invokeAndWait(() -> {
                 try {
                     TabbedApplication app = new TabbedApplication();
+                    background[0] = app.saver;
                     app.tabs.setSize(1000, 700);
                     DocumentTab first = app.addDocument(null, null);
                     DocumentTab second = app.addDocument(null, null);
@@ -1127,7 +1532,8 @@ public class ScriptLogLite {
                     throw new RuntimeException(exception);
                 }
             });
-            // Flush deferred Swing restoration/activation notifications before cleanup.
+            background[0].flush().get();
+            background[0].close();
             SwingUtilities.invokeAndWait(() -> { });
         } finally {
             try (java.util.stream.Stream<Path> files = Files.list(directory)) {
@@ -1143,18 +1549,21 @@ public class ScriptLogLite {
             ReplayLog imported = ReplayLog.load(sample, -1);
             check(imported.states.size() == 1260, "sample event count");
             check(imported.states.get(1259).text.length() == 206, "sample final text length");
-            ReplayLog roundtrip = JsonLog.load(JsonLog.export(imported.lines, imported.metadata));
+            ReplayLog roundtrip = JsonLog.load(JsonLog.export(imported.events, imported.metadata));
             checkHistory(imported, roundtrip, "sample JSON round trip");
+            List<?> originalJson = (List<?>) new Json(Files.readString(sample)).parse();
+            List<?> exportedJson = (List<?>) new Json(JsonLog.export(imported.events, imported.metadata)).parse();
+            check(originalJson.get(1).equals(exportedJson.get(1)), "sample event JSON fields preserved exactly");
             check(roundtrip.metadata.get("fontFamily").equals("Calibri"), "sample metadata preserved");
             check(JsonLog.number(roundtrip.metadata, "startTime") == 179610304410659L,
                     "nanosecond precision preserved");
             check(JsonLog.number(roundtrip.metadata, "endTime") == 179743787869526L,
                     "sample endTime preserved");
             SwingUtilities.invokeAndWait(() -> {
-                LoggingFilter filter = new LoggingFilter(new PrintWriter(new java.io.StringWriter()));
+                LoggingFilter filter = new LoggingFilter();
                 JTextArea text = createTextArea(filter);
                 restoreLog(text, filter, imported);
-                filter.write("keyPressed keyCode=65");
+                filter.append(new KeyLogEvent(filter.timestamp(), EventType.KEY_PRESSED, 65, null, null, null, null, null));
                 ReplayLog continued = ReplayLog.parse(filter.entries);
                 Instant previous = continued.states.get(continued.states.size() - 2).time;
                 Instant next = continued.states.get(continued.states.size() - 1).time;
@@ -1175,8 +1584,8 @@ public class ScriptLogLite {
 
     static void testScroll() throws Exception {
         SwingUtilities.invokeAndWait(() -> {
-            LoggingFilter filter = new LoggingFilter(new PrintWriter(new java.io.StringWriter()));
-            filter.write("session initialText=\"\"");
+            LoggingFilter filter = new LoggingFilter();
+            filter.startSession("");
             JTextArea text = createTextArea(filter);
             JScrollPane scroll = createScrollPane(text, filter);
             scroll.setSize(200, 100);
@@ -1189,7 +1598,7 @@ public class ScriptLogLite {
             restoreLog(text, filter, replay);
             check(scroll.getViewport().getViewPosition().equals(new Point(80, 120)),
                     "open restores scroll position");
-            check(filter.entries.equals(replay.lines), "scroll restoration is not logged");
+            checkHistory(replay, ReplayLog.parse(filter.entries), "scroll restoration is not logged");
             ReplayWindow window = new ReplayWindow(replay);
             window.scroll.setSize(200, 100);
             window.scroll.doLayout();
@@ -1208,18 +1617,18 @@ public class ScriptLogLite {
         try {
             SwingUtilities.invokeAndWait(() -> {
                 try {
-                    LoggingFilter filter = new LoggingFilter(new PrintWriter(new java.io.StringWriter()));
-                    filter.write("session initialText=\"\"");
+                    LoggingFilter filter = new LoggingFilter();
+                    filter.startSession("");
                     JTextArea text = createTextArea(filter);
                     restoreLog(text, filter, ReplayLog.parse(original));
                     check(text.getText().equals(special), "open restores Unicode and escaped text");
                     check(text.getCaret().getDot() == special.length()
                             && text.getCaret().getMark() == 0, "open restores selection direction");
-                    check(filter.entries.equals(original), "restore creates no synthetic events");
+                    checkHistory(ReplayLog.parse(original), ReplayLog.parse(filter.entries), "restore creates no synthetic events");
                     filter.save(saved);
                     checkHistory(ReplayLog.parse(original), ReplayLog.load(saved, -1), "save preserves history");
 
-                    LoggingFilter continued = new LoggingFilter(new PrintWriter(new java.io.StringWriter()));
+                    LoggingFilter continued = new LoggingFilter();
                     JTextArea next = createTextArea(continued);
                     restoreLog(next, continued, ReplayLog.load(saved, -1));
                     ((AbstractDocument) next.getDocument()).replace(0, special.length(), "Continued", null);
@@ -1235,13 +1644,13 @@ public class ScriptLogLite {
                     check(roundtrip.states.get(previous).text.equals(special),
                             "reverse replay crosses the save/open boundary");
                     restoreLog(next, continued, roundtrip);
-                    check(next.getText().equals("Continued") && continued.entries.equals(roundtrip.lines),
+                    check(next.getText().equals("Continued") && continued.entries.size() == roundtrip.events.size(),
                             "repeated reopen");
                     try {
                         continued.save(directory.resolve("missing").resolve("failed.log"));
                         throw new AssertionError("Save to missing directory succeeded");
                     } catch (IOException expected) { }
-                    check(ReplayLog.load(saved, -1).lines.equals(roundtrip.lines), "failed save preserves existing log");
+                    checkHistory(roundtrip, ReplayLog.load(saved, -1), "failed save preserves existing log");
                 } catch (Exception exception) {
                     throw new RuntimeException(exception);
                 }
@@ -1268,169 +1677,140 @@ public class ScriptLogLite {
 
     /** Adapter for the experiment's [[metadata], [events]] JSON format. */
     static class JsonLog {
-        static final Map<String, Integer> IDS = Map.of("insertString", 101, "remove", 102,
-                "replace", 103, "caretUpdate", 104, "scrollChange", 107,
-                "keyPressed", 207, "keyReleased", 208);
-
-        static Map<String, String> fields(String line) {
-            Map<String, String> fields = new LinkedHashMap<>();
-            Matcher matcher = ReplayLog.FIELD.matcher(line);
-            while (matcher.find()) fields.put(matcher.group(1), ReplayLog.decode(matcher.group(2)));
-            return fields;
+        static String export(List<?> input, Map<String, Object> originalMetadata) {
+            java.io.StringWriter writer = new java.io.StringWriter();
+            try { write(ReplayLog.parse(input).events, originalMetadata, writer); }
+            catch (IOException exception) { throw new java.io.UncheckedIOException(exception); }
+            return writer.toString();
         }
 
-        static String export(List<String> lines, Map<String, Object> originalMetadata) {
-            ReplayLog replay = ReplayLog.parse(lines);
-            ReplayState initial = replay.states.get(0);
-            ReplayState last = replay.states.get(replay.states.size() - 1);
+        /** Stream one JSON event at a time; no whole-output string or event-map list. */
+        static void write(List<LogEvent> events, Map<String, Object> originalMetadata, java.io.Writer writer) throws IOException {
+            if (events.isEmpty() || !(events.get(0) instanceof SessionEvent)) throw new IllegalArgumentException("Missing session");
+            SessionEvent initial = (SessionEvent) events.get(0);
+            LogEvent last = events.get(events.size() - 1);
+            // Validate one forward pass using a single text buffer, without replay checkpoints.
+            StringBuilder text = new StringBuilder(initial.initialText);
+            Instant previous = initial.time;
+            for (int i = 1; i < events.size(); i++) {
+                LogEvent event = events.get(i);
+                if (event.time.isBefore(previous)) throw new IllegalArgumentException("timestamps run backwards");
+                previous = event.time;
+                if (event instanceof EditEvent) ((EditEvent) event).apply(text);
+                else if (event instanceof CaretLogEvent) {
+                    CaretLogEvent caret = (CaretLogEvent) event;
+                    if (caret.dot < 0 || caret.mark < 0 || caret.dot > text.length() || caret.mark > text.length()) {
+                        throw new IllegalArgumentException("caret outside document");
+                    }
+                } else if (event instanceof ScrollLogEvent) {
+                    ScrollLogEvent scroll = (ScrollLogEvent) event;
+                    if (scroll.x < 0 || scroll.y < 0) throw new IllegalArgumentException("negative scroll position");
+                } else if (event instanceof SessionEvent) throw new IllegalArgumentException("Unexpected session marker");
+            }
             Map<String, Object> metadata = new LinkedHashMap<>(originalMetadata);
-            for (String key : List.of("id_age", "id_language", "id_task", "id_condition",
-                    "id_comment", "id_code", "id_family_name", "id_project", "textLanguage",
-                    "id_first_name", "id_gender")) metadata.putIfAbsent(key, "");
+            for (String key : List.of("id_age", "id_language", "id_task", "id_condition", "id_comment", "id_code",
+                    "id_family_name", "id_project", "textLanguage", "id_first_name", "id_gender")) metadata.putIfAbsent(key, "");
             metadata.putIfAbsent("osName", System.getProperty("os.name"));
             metadata.putIfAbsent("Version", "ScriptLogLite-2");
-            metadata.putIfAbsent("fontFamily", "Monospaced");
-            metadata.putIfAbsent("fontSize", 12);
+            metadata.putIfAbsent("fontFamily", "Monospaced"); metadata.putIfAbsent("fontSize", 12);
             metadata.putIfAbsent("lineSpacing", 1.0);
-            for (String key : List.of("TextAreaWidth", "TextAreaHeight", "TextAreaX", "TextAreaY")) {
-                metadata.putIfAbsent(key, 0);
-            }
+            for (String key : List.of("TextAreaWidth", "TextAreaHeight", "TextAreaX", "TextAreaY")) metadata.putIfAbsent(key, 0);
             long start = metadata.containsKey("startTime") ? number(metadata, "startTime") : 0;
             metadata.put("startTime", start);
             long end = Math.addExact(start, Duration.between(initial.time, last.time).toNanos());
             if (metadata.containsKey("endTime")) end = Math.max(end, number(metadata, "endTime"));
             metadata.put("endTime", end);
-            // Added fields allow an initially nonempty document and lossless internal timestamp round trips.
-            metadata.put("initialText", initial.text);
+            metadata.put("initialText", initial.initialText);
             metadata.put("recordingStartTime", initial.time.toString());
-            metadata.put("tokensInFinalText", last.text.length());
-            List<Object> events = new ArrayList<>();
-            for (int i = 1; i < replay.states.size(); i++) {
-                ReplayState state = replay.states.get(i);
-                String method = state.description.split(" ", 2)[0];
-                Map<String, String> fields = fields(state.description);
+            metadata.put("tokensInFinalText", text.length());
+            writer.write("[\n  [\n    ");
+            writer.write(Json.stringify(metadata, 2));
+            writer.write("\n  ],\n  [");
+            for (int i = 1; i < events.size(); i++) {
+                LogEvent item = events.get(i);
+                long elapsed = Duration.between(initial.time, item.time).toNanos();
                 Map<String, Object> event = new LinkedHashMap<>();
-                long elapsed = Duration.between(initial.time, state.time).toNanos();
                 event.put("when", Math.addExact(start, elapsed));
                 event.put("relativeTime", String.format(java.util.Locale.ROOT, "%.3f", elapsed / 1e9));
-                event.put("event", "<" + method + ">");
-                event.put("eventID", IDS.get(method));
-                switch (method) {
-                    case "insertString": case "replace": case "remove":
-                        event.put("offset", Integer.parseInt(ReplayLog.required(fields, "offset")));
-                        event.put("length", Integer.parseInt(ReplayLog.required(fields, "length")));
-                        if (!method.equals("remove")) event.put("str", fields.get("text"));
-                        break;
-                    case "caretUpdate":
-                        event.put("dot", state.dot);
-                        event.put("mark", state.mark);
-                        break;
-                    case "scrollChange":
-                        event.put("viewX", state.scrollX);
-                        event.put("viewY", state.scrollY);
-                        break;
-                    case "keyPressed": case "keyReleased":
-                        event.put("keyCode", Integer.parseInt(ReplayLog.required(fields, "keyCode")));
-                        // Retain additional keyboard details when our recorder supplies them.
-                        for (String key : List.of("keyText", "keyChar", "modifiersText")) {
-                            if (fields.containsKey(key)) event.put(key, fields.get(key));
-                        }
-                        for (String key : List.of("modifiers", "keyLocation")) {
-                            if (fields.containsKey(key)) event.put(key, Integer.parseInt(fields.get(key)));
-                        }
-                        break;
-                    default: throw new IllegalArgumentException("Unknown event " + method);
+                event.put("event", "<" + item.type.name + ">"); event.put("eventID", item.type.id);
+                if (item instanceof EditEvent) {
+                    EditEvent edit = (EditEvent) item;
+                    event.put("offset", edit.offset); event.put("length", edit.removed.length());
+                    if (edit.type != EventType.REMOVE) event.put("str", edit.inserted);
+                } else if (item instanceof CaretLogEvent) {
+                    CaretLogEvent caret = (CaretLogEvent) item;
+                    event.put("dot", caret.dot); event.put("mark", caret.mark);
+                } else if (item instanceof ScrollLogEvent) {
+                    ScrollLogEvent scroll = (ScrollLogEvent) item;
+                    event.put("viewX", scroll.x); event.put("viewY", scroll.y);
+                } else if (item instanceof KeyLogEvent) {
+                    KeyLogEvent key = (KeyLogEvent) item;
+                    event.put("keyCode", key.keyCode);
+                    if (key.keyText != null) event.put("keyText", key.keyText);
+                    if (key.keyChar != null) event.put("keyChar", key.keyChar);
+                    if (key.modifiers != null) event.put("modifiers", key.modifiers);
+                    if (key.modifiersText != null) event.put("modifiersText", key.modifiersText);
+                    if (key.keyLocation != null) event.put("keyLocation", key.keyLocation);
                 }
-                events.add(event);
+                writer.write(i == 1 ? "\n    " : ",\n    ");
+                writer.write(Json.stringify(event, 2));
             }
-            return Json.stringify(List.of(List.of(metadata), events), 0);
+            writer.write(events.size() == 1 ? "]\n]" : "\n  ]\n]");
         }
 
         @SuppressWarnings("unchecked")
         static ReplayLog load(String json) {
             Object parsed = new Json(json).parse();
-            if (!(parsed instanceof List) || ((List<?>) parsed).size() != 2) {
-                throw new IllegalArgumentException("Expected [[metadata], [events]]");
-            }
+            if (!(parsed instanceof List) || ((List<?>) parsed).size() != 2) throw new IllegalArgumentException("Expected [[metadata], [events]]");
             List<?> root = (List<?>) parsed;
             if (!(root.get(0) instanceof List) || ((List<?>) root.get(0)).size() != 1
-                    || !(((List<?>) root.get(0)).get(0) instanceof Map)
-                    || !(root.get(1) instanceof List)) {
+                    || !(((List<?>) root.get(0)).get(0) instanceof Map) || !(root.get(1) instanceof List)) {
                 throw new IllegalArgumentException("Expected one metadata object and an event array");
             }
             Map<String, Object> metadata = (Map<String, Object>) ((List<?>) root.get(0)).get(0);
             long start = number(metadata, "startTime");
-            Instant anchor = metadata.containsKey("recordingStartTime")
-                    ? Instant.parse(string(metadata, "recordingStartTime")) : Instant.EPOCH;
-            String text = metadata.containsKey("initialText") ? string(metadata, "initialText") : "";
-            List<String> lines = new ArrayList<>();
-            lines.add(anchor + " session initialText=" + LoggingFilter.quote(text));
+            Instant anchor = metadata.containsKey("recordingStartTime") ? Instant.parse(string(metadata, "recordingStartTime")) : Instant.EPOCH;
+            String initial = metadata.containsKey("initialText") ? string(metadata, "initialText") : "";
+            StringBuilder text = new StringBuilder(initial);
+            List<LogEvent> events = new ArrayList<>(); events.add(new SessionEvent(anchor, initial));
             int index = 0;
             for (Object item : (List<?>) root.get(1)) {
                 index++;
                 try {
                     if (!(item instanceof Map)) throw new IllegalArgumentException("event must be an object");
-                    Map<String, Object> event = (Map<String, Object>) item;
-                    String tag = string(event, "event");
-                    if (!tag.startsWith("<") || !tag.endsWith(">")) {
-                        throw new IllegalArgumentException("invalid event name");
-                    }
-                    String method = tag.substring(1, tag.length() - 1);
-                    if (!IDS.containsKey(method)) throw new IllegalArgumentException("unknown event " + tag);
-                    if (number(event, "eventID") != IDS.get(method)) {
-                        throw new IllegalArgumentException("eventID does not match " + tag);
-                    }
-                    long elapsed = Math.subtractExact(number(event, "when"), start);
+                    Map<String, Object> fields = (Map<String, Object>) item;
+                    String tag = string(fields, "event");
+                    if (!tag.startsWith("<") || !tag.endsWith(">")) throw new IllegalArgumentException("invalid event name");
+                    EventType type = EventType.named(tag.substring(1, tag.length() - 1));
+                    if (type == EventType.SESSION || number(fields, "eventID") != type.id) throw new IllegalArgumentException("eventID mismatch");
+                    long elapsed = Math.subtractExact(number(fields, "when"), start);
                     if (elapsed < 0) throw new IllegalArgumentException("event precedes startTime");
-                    StringBuilder line = new StringBuilder(anchor.plusNanos(elapsed) + " " + method);
-                    switch (method) {
-                        case "insertString": case "replace": case "remove":
-                            int offset = integer(event, "offset"), length = integer(event, "length");
-                            if (offset < 0 || length < 0 || offset > text.length() - length) {
-                                throw new IllegalArgumentException("edit outside document");
-                            }
-                            if (method.equals("insertString") && length != 0) {
-                                throw new IllegalArgumentException("insertString length must be zero");
-                            }
-                            String old = text.substring(offset, offset + length);
-                            String replacement = method.equals("remove") ? null
-                                    : event.get("str") == null ? null : string(event, "str");
-                            line.append(" offset=").append(offset).append(" length=").append(length)
-                                    .append(" text=").append(LoggingFilter.quote(replacement))
-                                    .append(" oldText=").append(LoggingFilter.quote(old));
-                            text = text.substring(0, offset) + (replacement == null ? "" : replacement)
-                                    + text.substring(offset + length);
-                            break;
-                        case "caretUpdate":
-                            line.append(" dot=").append(integer(event, "dot"))
-                                    .append(" mark=").append(integer(event, "mark"));
-                            break;
-                        case "scrollChange":
-                            line.append(" x=").append(integer(event, "viewX"))
-                                    .append(" y=").append(integer(event, "viewY"));
-                            break;
-                        case "keyPressed": case "keyReleased":
-                            line.append(" keyCode=").append(integer(event, "keyCode"));
-                            for (String key : List.of("keyText", "keyChar", "modifiersText")) {
-                                if (event.containsKey(key)) line.append(" ").append(key).append("=")
-                                        .append(LoggingFilter.quote(string(event, key)));
-                            }
-                            for (String key : List.of("modifiers", "keyLocation")) {
-                                if (event.containsKey(key)) line.append(" ").append(key).append("=")
-                                        .append(integer(event, key));
-                            }
-                            break;
+                    Instant time = anchor.plusNanos(elapsed);
+                    LogEvent event;
+                    switch (type) {
+                        case INSERT: case REMOVE: case REPLACE:
+                            int offset = integer(fields, "offset"), length = integer(fields, "length");
+                            if (offset < 0 || length < 0 || offset > text.length() - length) throw new IllegalArgumentException("edit outside document");
+                            if (type == EventType.INSERT && length != 0) throw new IllegalArgumentException("insertString length must be zero");
+                            if (type != EventType.REMOVE && !fields.containsKey("str")) throw new IllegalArgumentException("missing str");
+                            String inserted = type == EventType.REMOVE || fields.get("str") == null ? null : string(fields, "str");
+                            EditEvent edit = new EditEvent(time, type, offset, text.substring(offset, offset + length), inserted);
+                            edit.apply(text); event = edit; break;
+                        case CARET: event = new CaretLogEvent(time, integer(fields, "dot"), integer(fields, "mark")); break;
+                        case SCROLL: event = new ScrollLogEvent(time, integer(fields, "viewX"), integer(fields, "viewY")); break;
+                        default: event = new KeyLogEvent(time, type, integer(fields, "keyCode"), optionalString(fields, "keyText"),
+                                optionalString(fields, "keyChar"), optionalInt(fields, "modifiers"), optionalString(fields, "modifiersText"),
+                                optionalInt(fields, "keyLocation"));
                     }
-                    lines.add(line.toString());
+                    events.add(event);
                 } catch (RuntimeException exception) {
-                    throw new IllegalArgumentException("Invalid JSON event " + index + ": "
-                            + exception.getMessage(), exception);
+                    throw new IllegalArgumentException("Invalid JSON event " + index + ": " + exception.getMessage(), exception);
                 }
             }
-            ReplayLog replay = ReplayLog.parse(lines);
-            replay.metadata.putAll(metadata);
-            return replay;
+            ReplayLog replay = new ReplayLog(events); replay.metadata.putAll(metadata); return replay;
         }
+        static String optionalString(Map<String, Object> fields, String key) { return fields.containsKey(key) ? string(fields, key) : null; }
+        static Integer optionalInt(Map<String, Object> fields, String key) { return fields.containsKey(key) ? integer(fields, key) : null; }
 
         static long number(Map<String, Object> object, String key) {
             Object value = object.get(key);
