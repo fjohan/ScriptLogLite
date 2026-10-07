@@ -52,7 +52,7 @@ public class ScriptLogLite {
 
     public static void main(String[] args) throws Exception {
         if (!java.awt.GraphicsEnvironment.isHeadless()) {
-            installTheme(Theme.LIGHT);
+            installTheme(Theme.NIMBUS);
         }
         if (args.length > 0 && args[0].equals("--replay")) {
             if (args.length < 2 || args.length > 3) {
@@ -103,6 +103,7 @@ public class ScriptLogLite {
     }
 
     enum Theme {
+        NIMBUS("Nimbus", "javax.swing.plaf.nimbus.NimbusLookAndFeel"),
         LIGHT("Light", "com.formdev.flatlaf.FlatLightLaf"),
         DARK("Dark", "com.formdev.flatlaf.FlatDarkLaf");
 
@@ -133,7 +134,7 @@ public class ScriptLogLite {
         final List<Action> documentActions = new ArrayList<>();
         final JFileChooser chooser = new JFileChooser();
         final Map<Theme, javax.swing.JRadioButtonMenuItem> themeChoices = new java.util.EnumMap<>(Theme.class);
-        Theme theme = Theme.LIGHT;
+        Theme theme = Theme.NIMBUS;
         final Timer autosave;
         final BackgroundSaver saver;
         boolean closeAllRequested, exitRequested;
@@ -233,9 +234,11 @@ public class ScriptLogLite {
         void changeTheme(Theme selected) throws Exception {
             // Look-and-feel updates must not turn view restoration into recorded edits.
             Map<DocumentTab, Point> positions = new HashMap<>();
+            Map<DocumentTab, Point> selections = new HashMap<>();
             for (DocumentTab document : documents) {
                 JScrollPane scroll = (JScrollPane) document.text.getClientProperty("logScrollPane");
                 positions.put(document, new Point(scroll.getViewport().getViewPosition()));
+                selections.put(document, new Point(document.text.getCaret().getDot(), document.text.getCaret().getMark()));
                 document.filter.restoring = true;
             }
             try {
@@ -250,6 +253,9 @@ public class ScriptLogLite {
                 }
                 SwingUtilities.updateComponentTreeUI(chooser);
                 for (Map.Entry<DocumentTab, Point> entry : positions.entrySet()) {
+                    Point selection = selections.get(entry.getKey());
+                    entry.getKey().text.setCaretPosition(selection.y);
+                    entry.getKey().text.moveCaretPosition(selection.x);
                     JScrollPane scroll = (JScrollPane) entry.getKey().text.getClientProperty("logScrollPane");
                     applyScroll(scroll, entry.getValue().x, entry.getValue().y);
                 }
@@ -1414,13 +1420,17 @@ public class ScriptLogLite {
     }
 
     static void testThemes() throws Exception {
+        List<Theme> themes = new ArrayList<>();
+        themes.add(Theme.NIMBUS);
         try {
             Class.forName(Theme.LIGHT.className);
             Class.forName(Theme.DARK.className);
+            themes.add(Theme.LIGHT);
+            themes.add(Theme.DARK);
         } catch (ClassNotFoundException exception) {
-            System.out.println("FlatLaf theme checks skipped: dependency not on classpath (use ./run.sh --self-test).");
-            return;
+            System.out.println("Optional FlatLaf checks skipped: dependency not on classpath.");
         }
+        themes.add(Theme.NIMBUS);
         SwingUtilities.invokeAndWait(() -> {
             javax.swing.LookAndFeel original = javax.swing.UIManager.getLookAndFeel();
             try {
@@ -1436,10 +1446,10 @@ public class ScriptLogLite {
                 app.addTab(replayPanel, "Replay");
                 replay.seek(replay.log.states.size() - 1);
                 int position = replay.position;
-                for (Theme theme : new Theme[] {Theme.LIGHT, Theme.DARK, Theme.LIGHT}) {
+                for (Theme theme : themes) {
                     app.changeTheme(theme);
                     check(javax.swing.UIManager.getLookAndFeel().getClass().getName().equals(theme.className),
-                            "FlatLaf installed: " + theme.label);
+                            "Look and feel installed: " + theme.label);
                     check(app.themeChoices.get(theme).isSelected(), "theme menu selection");
                     check(document.text.getText().equals("Theme switching preserves the document")
                             && document.text.getCaret().getDot() == 12
@@ -1455,7 +1465,7 @@ public class ScriptLogLite {
                 catch (Exception exception) { throw new RuntimeException(exception); }
             }
         });
-        System.out.println("FlatLaf Light/Dark switching checks passed");
+        System.out.println("Theme switching checks passed (Nimbus included)");
     }
 
     static void testTabs() throws Exception {

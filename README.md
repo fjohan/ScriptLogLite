@@ -1,9 +1,8 @@
 # ScriptLogLite
 
 A Swing text area records document edits, caret movements, key
-presses/releases, and scrolling. Requires a JDK (Java 11 or newer). On Linux/macOS, the launcher downloads the
-FlatLaf JAR from Maven Central on its first run using `curl`, caches it in `.deps`,
-and starts the program. Later runs work offline:
+presses/releases, and scrolling. Requires a JDK (Java 11 or newer). Nimbus is included with Java; the default
+launcher requires no additional libraries or downloads:
 
 ```sh
 ./run.sh
@@ -13,17 +12,27 @@ The main `JFrame` contains a `JTabbedPane`. Each document and replay viewer has
 its own closable tab. New and Open Log create separate documents with independent
 text, selection, scroll position, and logging history. Tabs scroll when there
 are too many to fit. A compact toolbar provides New, Open, Save, and Replay.
-The application uses [FlatLaf](https://www.formdev.com/flatlaf/) 3.7. Choose
-**View → Theme → Light / Dark** to change the entire workspace while it is open.
-Light is the default at startup. Switching preserves document text, selection,
-logging history, and replay position. The editor uses a larger font and padding.
-Theme choices apply for the current run.
+The application starts with Nimbus. **View → Theme** includes Nimbus and optional
+FlatLaf Light / Dark themes. FlatLaf remains supported but is never activated
+at startup. Switching preserves text, selection, logging history, and replay
+position; the choice applies for the current run.
+
+To download/cache FlatLaf 3.7 and make its themes usable, run:
+
+```sh
+./run.sh --with-flatlaf
+```
+
+This uses `curl` and Maven Central on the first run. Later runs automatically
+include the cached JAR on the classpath, while still starting in Nimbus. Maven
+builds also include FlatLaf without activating it. Selecting a FlatLaf theme
+without its JAR shows instructions for enabling support.
 
 The menus provide:
 
 - **File**: New, Open Log, Save Log, Save Log As, Close, Exit.
 - **Edit**: Cut, Copy, Paste, Select All, and example insert/replace/remove commands.
-- **View**: Replay Current Log, Open Log for Replay, and Light/Dark themes.
+- **View**: Replay Current Log, Open Log for Replay, and Nimbus/Light/Dark themes.
 - **Tabs**: Next Tab, Previous Tab, Close All, and a list of open tabs.
 - **Help**: About.
 
@@ -217,6 +226,6 @@ java --class-path .deps/flatlaf-3.7.jar src/main/java/se/lu/scriptloglite/Script
 ```
 
 The dependency-free headless source command above still checks logging and
-replay; it reports that theme checks are skipped if FlatLaf is absent. To include
-those checks without Maven, use `./run.sh --self-test` (with
+replay; Nimbus theme checks run without extra dependencies; optional FlatLaf checks are skipped when absent. To include
+those checks without Maven, use `./run.sh --with-flatlaf --self-test` (with
 `JAVA_TOOL_OPTIONS=-Djava.awt.headless=true` if no display is available).

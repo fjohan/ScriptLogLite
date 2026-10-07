@@ -6,7 +6,10 @@ cd "$scriptloglite_root"
 flatlaf_version=3.7
 flatlaf_jar=".deps/flatlaf-${flatlaf_version}.jar"
 
-if [[ ! -s "$flatlaf_jar" ]]; then
+# Nimbus needs no download. Opt in to fetching the optional FlatLaf themes.
+if [[ "${1:-}" == "--with-flatlaf" ]]; then
+    shift
+    if [[ ! -s "$flatlaf_jar" ]]; then
     mkdir -p .deps
     flatlaf_download=$(mktemp .deps/flatlaf-download.XXXXXX)
     trap 'rm -f "$flatlaf_download"' EXIT
@@ -15,6 +18,10 @@ if [[ ! -s "$flatlaf_jar" ]]; then
         --output "$flatlaf_download"
     mv -- "$flatlaf_download" "$flatlaf_jar"
     trap - EXIT
+    fi
 fi
 
-exec java --class-path "$flatlaf_jar" src/main/java/se/lu/scriptloglite/ScriptLogLite.java "$@"
+if [[ -s "$flatlaf_jar" ]]; then
+    exec java --class-path "$flatlaf_jar" src/main/java/se/lu/scriptloglite/ScriptLogLite.java "$@"
+fi
+exec java src/main/java/se/lu/scriptloglite/ScriptLogLite.java "$@"
