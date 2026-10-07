@@ -1,0 +1,107 @@
+[
+  [
+    {
+      "startTime": 176817272384268,
+      "fontFamily": "Dialog",
+      "fontSize": 12,
+      "id_age": "",
+      "id_language": "",
+      "id_task": "",
+      "id_condition": "",
+      "id_comment": "",
+      "id_code": "",
+      "id_family_name": "",
+      "id_project": "",
+      "textLanguage": "",
+      "id_first_name": "",
+      "id_gender": "",
+      "osName": "Linux",
+      "Version": "DocumentFilterLogger-2",
+      "lineSpacing": 1.0,
+      "TextAreaWidth": 0,
+      "TextAreaHeight": 0,
+      "TextAreaX": 0,
+      "TextAreaY": 0,
+      "endTime": 176817352382598,
+      "initialText": "",
+      "recordingStartTime": "2026-10-07T13:48:56.467688235Z",
+      "tokensInFinalText": 0
+    }
+  ],
+  [
+    {
+      "when": 176817344575508,
+      "relativeTime": "0.072",
+      "event": "<insertString>",
+      "eventID": 101,
+      "offset": 0,
+      "length": 0,
+      "str": "Hello"
+    },
+    {
+      "when": 176817351572490,
+      "relativeTime": "0.079",
+      "event": "<caretUpdate>",
+      "eventID": 104,
+      "dot": 5,
+      "mark": 5
+    },
+    {
+      "when": 176817351812992,
+      "relativeTime": "0.079",
+      "event": "<replace>",
+      "eventID": 103,
+      "offset": 0,
+      "length": 5,
+      "str": "World"
+    },
+    {
+      "when": 176817351969257,
+      "relativeTime": "0.080",
+      "event": "<caretUpdate>",
+      "eventID": 104,
+      "dot": 0,
+      "mark": 0
+    },
+    {
+      "when": 176817352166774,
+      "relativeTime": "0.080",
+      "event": "<caretUpdate>",
+      "eventID": 104,
+      "dot": 5,
+      "mark": 5
+    },
+    {
+      "when": 176817352226744,
+      "relativeTime": "0.080",
+      "event": "<caretUpdate>",
+      "eventID": 104,
+      "dot": 1,
+      "mark": 1
+    },
+    {
+      "when": 176817352269117,
+      "relativeTime": "0.080",
+      "event": "<caretUpdate>",
+      "eventID": 104,
+      "dot": 4,
+      "mark": 1
+    },
+    {
+      "when": 176817352307275,
+      "relativeTime": "0.080",
+      "event": "<remove>",
+      "eventID": 102,
+      "offset": 0,
+      "length": 5
+    },
+    {
+      "when": 176817352382598,
+      "relativeTime": "0.080",
+      "event": "<caretUpdate>",
+      "eventID": 104,
+      "dot": 0,
+      "mark": 0
+    }
+  ]
+]

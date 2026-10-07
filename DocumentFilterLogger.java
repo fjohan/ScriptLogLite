@@ -11,6 +11,7 @@ import javax.swing.JOptionPane;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -37,7 +38,7 @@ import javax.swing.text.DocumentFilter;
 
 /** Logs DocumentFilter editing methods and text-area caret and key events. */
 public class DocumentFilterLogger {
-    private static final Path LOG_PATH = Path.of("document-filter.log");
+    private static final Path LOG_PATH = Path.of("document-filter.json");
 
     public static void main(String[] args) throws Exception {
         if (args.length > 0 && args[0].equals("--replay")) {
@@ -62,11 +63,13 @@ public class DocumentFilterLogger {
                     args.length == 3 ? Integer.parseInt(args[2]) : -1);
         }
         final ReplayLog initialLog = opened;
-        PrintWriter log = new PrintWriter(Files.newBufferedWriter(LOG_PATH,
-                StandardCharsets.UTF_8, StandardOpenOption.CREATE,
-                StandardOpenOption.APPEND), true);
-        Runtime.getRuntime().addShutdownHook(new Thread(log::close));
+        PrintWriter log = new PrintWriter(java.io.OutputStream.nullOutputStream());
         LoggingFilter filter = new LoggingFilter(log);
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try { filter.saveAutomatic(); }
+            catch (Exception exception) { System.err.println(exception.getMessage()); }
+            log.close();
+        }));
         filter.write("session initialText=" + LoggingFilter.quote(""));
         System.out.println("Logging to " + LOG_PATH.toAbsolutePath());
 
@@ -80,10 +83,21 @@ public class DocumentFilterLogger {
                 text.moveCaretPosition(4);
                 document.remove(0, 5);
             }));
+            filter.saveAutomatic();
             log.close();
             return;
         }
-        SwingUtilities.invokeLater(() -> showWindow(filter, initialLog));
+        SwingUtilities.invokeLater(() -> {
+            showWindow(filter, initialLog);
+            Timer autosave = new Timer(500, event -> {
+                try { filter.saveAutomatic(); }
+                catch (Exception exception) {
+                    ((Timer) event.getSource()).stop();
+                    showError(null, exception);
+                }
+            });
+            autosave.start();
+        });
     }
 
     private static void showWindow(LoggingFilter filter, ReplayLog initialLog) {
@@ -94,7 +108,7 @@ public class DocumentFilterLogger {
         JFrame frame = new JFrame("DocumentFilter logger");
         JLabel status = new JLabel("Log contains the document and edit history.");
         JFileChooser chooser = new JFileChooser();
-        chooser.setSelectedFile(new java.io.File("saved-document.log"));
+        chooser.setSelectedFile(new java.io.File("saved-document.json"));
 
         JPanel buttons = new JPanel();
         JButton insert = new JButton("insertString");
@@ -216,6 +230,23 @@ public class DocumentFilterLogger {
     }
 
     static void restoreLog(JTextArea text, LoggingFilter filter, ReplayLog loaded) {
+        if (!loaded.metadata.isEmpty() && !loaded.metadata.containsKey("recordingStartTime")) {
+            // Imported experiment clocks have no wall-clock epoch. Keep their intervals,
+            // but attach the last event to now so continuation does not add decades of idle time.
+            Instant originalStart = loaded.states.get(0).time;
+            Instant originalEnd = loaded.states.get(loaded.states.size() - 1).time;
+            Instant newStart = Instant.now().minus(Duration.between(originalStart, originalEnd));
+            List<String> rebased = new ArrayList<>();
+            for (String line : loaded.lines) {
+                int separator = line.indexOf(' ');
+                Instant time = Instant.parse(line.substring(0, separator));
+                rebased.add(newStart.plus(Duration.between(originalStart, time)) + line.substring(separator));
+            }
+            ReplayLog adjusted = ReplayLog.parse(rebased);
+            adjusted.metadata.putAll(loaded.metadata);
+            adjusted.metadata.put("recordingStartTime", newStart.toString());
+            loaded = adjusted;
+        }
         ReplayState state = loaded.states.get(loaded.states.size() - 1);
         filter.restoring = true;
         try {
@@ -228,6 +259,9 @@ public class DocumentFilterLogger {
         }
         filter.entries.clear();
         filter.entries.addAll(loaded.lines);
+        filter.metadata.clear();
+        filter.metadata.putAll(loaded.metadata);
+        filter.dirty = true;
         filter.lastTime = state.time;
         // The automatic audit file starts a checkpoint; saved logs retain the entire history.
         filter.audit(Instant.now() + " session initialText=" + LoggingFilter.quote(state.text));
@@ -237,6 +271,24 @@ public class DocumentFilterLogger {
 
     private static JTextArea createTextArea(LoggingFilter filter) {
         JTextArea text = new JTextArea(12, 50);
+        filter.metadata.putIfAbsent("fontFamily", text.getFont().getFamily());
+        filter.metadata.putIfAbsent("fontSize", text.getFont().getSize());
+        text.addComponentListener(new java.awt.event.ComponentAdapter() {
+            private void capture() {
+                synchronized (filter) {
+                    filter.metadata.put("TextAreaWidth", text.getWidth());
+                    filter.metadata.put("TextAreaHeight", text.getHeight());
+                    Point location = text.isShowing() ? text.getLocationOnScreen() : text.getLocation();
+                    filter.metadata.put("TextAreaX", location.x);
+                    filter.metadata.put("TextAreaY", location.y);
+                    filter.dirty = true;
+                }
+            }
+            @Override
+            public void componentResized(java.awt.event.ComponentEvent event) { capture(); }
+            @Override
+            public void componentMoved(java.awt.event.ComponentEvent event) { capture(); }
+        });
         ((AbstractDocument) text.getDocument()).setDocumentFilter(filter);
         text.addCaretListener(filter::recordCaret);
         text.addKeyListener(new KeyAdapter() {
@@ -269,6 +321,8 @@ public class DocumentFilterLogger {
     public static class LoggingFilter extends DocumentFilter {
         private final PrintWriter log;
         final List<String> entries = new ArrayList<>();
+        final Map<String, Object> metadata = new LinkedHashMap<>();
+        boolean dirty = true;
         boolean restoring;
         Instant lastTime = Instant.MIN;
 
@@ -277,12 +331,21 @@ public class DocumentFilterLogger {
                     || (Files.exists(path) && Files.exists(LOG_PATH) && Files.isSameFile(path, LOG_PATH))) {
                 throw new IOException("Choose a different filename from the active automatic log: " + LOG_PATH);
             }
-            // Validate before writing, and replace the target only after the full write succeeds.
-            ReplayLog.parse(new ArrayList<>(entries));
+            saveJson(path);
+        }
+
+        synchronized void saveAutomatic() throws IOException {
+            if (!dirty || entries.isEmpty()) return;
+            saveJson(LOG_PATH);
+            dirty = false;
+        }
+
+        private void saveJson(Path path) throws IOException {
+            String json = JsonLog.export(new ArrayList<>(entries), metadata);
             Path target = path.toAbsolutePath();
             Path temporary = Files.createTempFile(target.getParent(), ".saved-log-", ".tmp");
             try {
-                Files.write(temporary, entries, StandardCharsets.UTF_8);
+                Files.writeString(temporary, json + "\n", StandardCharsets.UTF_8);
                 try {
                     Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE,
                             StandardCopyOption.REPLACE_EXISTING);
@@ -296,6 +359,7 @@ public class DocumentFilterLogger {
 
         public LoggingFilter(PrintWriter log) {
             this.log = log;
+            metadata.put("startTime", System.nanoTime());
         }
 
         @Override
@@ -352,6 +416,7 @@ public class DocumentFilterLogger {
             String entry = now + " " + message;
             audit(entry);
             entries.add(entry);
+            dirty = true;
         }
 
         private void audit(String entry) {
@@ -396,14 +461,22 @@ public class DocumentFilterLogger {
     static class ReplayLog {
         final List<ReplayState> states = new ArrayList<>();
         final List<String> lines = new ArrayList<>();
+        final Map<String, Object> metadata = new LinkedHashMap<>();
         // Each boundary includes an edit and the caret/key events following it.
         final List<Integer> boundaries = new ArrayList<>();
         static final Pattern FIELD = Pattern.compile(
                 "(\\w+)=(\"(?:\\\\.|[^\"\\\\])*+\"|\\S+)");
 
         static ReplayLog load(Path path, int session) throws Exception {
+            String content = Files.readString(path, StandardCharsets.UTF_8);
+            if (content.stripLeading().startsWith("[")) {
+                if (session != -1 && session != 1) {
+                    throw new IllegalArgumentException("A JSON log contains one session; choose session 1.");
+                }
+                return JsonLog.load(content);
+            }
             List<List<String>> sessions = new ArrayList<>();
-            for (String line : Files.readAllLines(path, StandardCharsets.UTF_8)) {
+            for (String line : content.split("\\R")) {
                 if (line.isBlank()) continue;
                 if (line.matches("\\S+ session .*")) sessions.add(new ArrayList<>());
                 if (!sessions.isEmpty()) sessions.get(sessions.size() - 1).add(line);
@@ -711,7 +784,44 @@ public class DocumentFilterLogger {
         });
         testSaveAndContinue(lines.subList(0, 3), special);
         testScroll();
+        testJson();
         System.out.println("Replay self-test passed");
+    }
+
+    static void testJson() throws Exception {
+        Path sample = Path.of("exp_subj_json_1.json");
+        if (Files.exists(sample)) {
+            ReplayLog imported = ReplayLog.load(sample, -1);
+            check(imported.states.size() == 1260, "sample event count");
+            check(imported.states.get(1259).text.length() == 206, "sample final text length");
+            ReplayLog roundtrip = JsonLog.load(JsonLog.export(imported.lines, imported.metadata));
+            checkHistory(imported, roundtrip, "sample JSON round trip");
+            check(roundtrip.metadata.get("fontFamily").equals("Calibri"), "sample metadata preserved");
+            check(JsonLog.number(roundtrip.metadata, "startTime") == 179610304410659L,
+                    "nanosecond precision preserved");
+            check(JsonLog.number(roundtrip.metadata, "endTime") == 179743787869526L,
+                    "sample endTime preserved");
+            SwingUtilities.invokeAndWait(() -> {
+                LoggingFilter filter = new LoggingFilter(new PrintWriter(new java.io.StringWriter()));
+                JTextArea text = createTextArea(filter);
+                restoreLog(text, filter, imported);
+                filter.write("keyPressed keyCode=65");
+                ReplayLog continued = ReplayLog.parse(filter.entries);
+                Instant previous = continued.states.get(continued.states.size() - 2).time;
+                Instant next = continued.states.get(continued.states.size() - 1).time;
+                check(Duration.between(previous, next).toSeconds() < 5,
+                        "import continuation clock is rebased");
+            });
+            System.out.println("Sample JSON: all 1259 events loaded and round-tripped");
+        }
+        String controls = "\b\f\u0000\n\t\r\"\\😀";
+        check(new Json(Json.quote(controls)).parse().equals(controls), "JSON control characters");
+        for (String invalid : List.of("[1,]", "{\"a\":1,\"a\":2}", "01", "[", "\"\\q\"")) {
+            try {
+                new Json(invalid).parse();
+                throw new AssertionError("Accepted invalid JSON " + invalid);
+            } catch (IllegalArgumentException expected) { }
+        }
     }
 
     static void testScroll() throws Exception {
@@ -758,7 +868,7 @@ public class DocumentFilterLogger {
                             && text.getCaret().getMark() == 0, "open restores selection direction");
                     check(filter.entries.equals(original), "restore creates no synthetic events");
                     filter.save(saved);
-                    check(Files.readAllLines(saved).equals(original), "save preserves history");
+                    checkHistory(ReplayLog.parse(original), ReplayLog.load(saved, -1), "save preserves history");
 
                     LoggingFilter continued = new LoggingFilter(new PrintWriter(new java.io.StringWriter()));
                     JTextArea next = createTextArea(continued);
@@ -771,8 +881,7 @@ public class DocumentFilterLogger {
                     ReplayState finalState = roundtrip.states.get(roundtrip.states.size() - 1);
                     check(finalState.text.equals("Continued") && finalState.dot == 6
                             && finalState.mark == 2, "save after continued editing");
-                    check(roundtrip.lines.subList(0, original.size()).equals(original),
-                            "continued save retains original events");
+                    checkHistory(ReplayLog.parse(original), roundtrip, "continued save retains original events");
                     int previous = roundtrip.previousEdit(roundtrip.states.size() - 1);
                     check(roundtrip.states.get(previous).text.equals(special),
                             "reverse replay crosses the save/open boundary");
@@ -783,7 +892,7 @@ public class DocumentFilterLogger {
                         continued.save(directory.resolve("missing").resolve("failed.log"));
                         throw new AssertionError("Save to missing directory succeeded");
                     } catch (IOException expected) { }
-                    check(Files.readAllLines(saved).equals(roundtrip.lines), "failed save preserves existing log");
+                    check(ReplayLog.load(saved, -1).lines.equals(roundtrip.lines), "failed save preserves existing log");
                 } catch (Exception exception) {
                     throw new RuntimeException(exception);
                 }
@@ -794,7 +903,347 @@ public class DocumentFilterLogger {
         }
     }
 
+    static void checkHistory(ReplayLog expected, ReplayLog actual, String message) {
+        check(actual.states.size() >= expected.states.size(), message);
+        for (int i = 0; i < expected.states.size(); i++) {
+            ReplayState a = expected.states.get(i), b = actual.states.get(i);
+            check(a.time.equals(b.time) && a.text.equals(b.text) && a.dot == b.dot
+                    && a.mark == b.mark && a.scrollX == b.scrollX && a.scrollY == b.scrollY
+                    && a.edit == b.edit, message + " event " + i);
+        }
+    }
+
     static void check(boolean condition, String message) {
         if (!condition) throw new AssertionError(message);
+    }
+
+    /** Adapter for the experiment's [[metadata], [events]] JSON format. */
+    static class JsonLog {
+        static final Map<String, Integer> IDS = Map.of("insertString", 101, "remove", 102,
+                "replace", 103, "caretUpdate", 104, "scrollChange", 107,
+                "keyPressed", 207, "keyReleased", 208);
+
+        static Map<String, String> fields(String line) {
+            Map<String, String> fields = new LinkedHashMap<>();
+            Matcher matcher = ReplayLog.FIELD.matcher(line);
+            while (matcher.find()) fields.put(matcher.group(1), ReplayLog.decode(matcher.group(2)));
+            return fields;
+        }
+
+        static String export(List<String> lines, Map<String, Object> originalMetadata) {
+            ReplayLog replay = ReplayLog.parse(lines);
+            ReplayState initial = replay.states.get(0);
+            ReplayState last = replay.states.get(replay.states.size() - 1);
+            Map<String, Object> metadata = new LinkedHashMap<>(originalMetadata);
+            for (String key : List.of("id_age", "id_language", "id_task", "id_condition",
+                    "id_comment", "id_code", "id_family_name", "id_project", "textLanguage",
+                    "id_first_name", "id_gender")) metadata.putIfAbsent(key, "");
+            metadata.putIfAbsent("osName", System.getProperty("os.name"));
+            metadata.putIfAbsent("Version", "DocumentFilterLogger-2");
+            metadata.putIfAbsent("fontFamily", "Monospaced");
+            metadata.putIfAbsent("fontSize", 12);
+            metadata.putIfAbsent("lineSpacing", 1.0);
+            for (String key : List.of("TextAreaWidth", "TextAreaHeight", "TextAreaX", "TextAreaY")) {
+                metadata.putIfAbsent(key, 0);
+            }
+            long start = metadata.containsKey("startTime") ? number(metadata, "startTime") : 0;
+            metadata.put("startTime", start);
+            long end = Math.addExact(start, Duration.between(initial.time, last.time).toNanos());
+            if (metadata.containsKey("endTime")) end = Math.max(end, number(metadata, "endTime"));
+            metadata.put("endTime", end);
+            // Added fields allow an initially nonempty document and lossless internal timestamp round trips.
+            metadata.put("initialText", initial.text);
+            metadata.put("recordingStartTime", initial.time.toString());
+            metadata.put("tokensInFinalText", last.text.length());
+            List<Object> events = new ArrayList<>();
+            for (int i = 1; i < replay.states.size(); i++) {
+                ReplayState state = replay.states.get(i);
+                String method = state.description.split(" ", 2)[0];
+                Map<String, String> fields = fields(state.description);
+                Map<String, Object> event = new LinkedHashMap<>();
+                long elapsed = Duration.between(initial.time, state.time).toNanos();
+                event.put("when", Math.addExact(start, elapsed));
+                event.put("relativeTime", String.format(java.util.Locale.ROOT, "%.3f", elapsed / 1e9));
+                event.put("event", "<" + method + ">");
+                event.put("eventID", IDS.get(method));
+                switch (method) {
+                    case "insertString": case "replace": case "remove":
+                        event.put("offset", Integer.parseInt(ReplayLog.required(fields, "offset")));
+                        event.put("length", Integer.parseInt(ReplayLog.required(fields, "length")));
+                        if (!method.equals("remove")) event.put("str", fields.get("text"));
+                        break;
+                    case "caretUpdate":
+                        event.put("dot", state.dot);
+                        event.put("mark", state.mark);
+                        break;
+                    case "scrollChange":
+                        event.put("viewX", state.scrollX);
+                        event.put("viewY", state.scrollY);
+                        break;
+                    case "keyPressed": case "keyReleased":
+                        event.put("keyCode", Integer.parseInt(ReplayLog.required(fields, "keyCode")));
+                        // Retain additional keyboard details when our recorder supplies them.
+                        for (String key : List.of("keyText", "keyChar", "modifiersText")) {
+                            if (fields.containsKey(key)) event.put(key, fields.get(key));
+                        }
+                        for (String key : List.of("modifiers", "keyLocation")) {
+                            if (fields.containsKey(key)) event.put(key, Integer.parseInt(fields.get(key)));
+                        }
+                        break;
+                    default: throw new IllegalArgumentException("Unknown event " + method);
+                }
+                events.add(event);
+            }
+            return Json.stringify(List.of(List.of(metadata), events), 0);
+        }
+
+        @SuppressWarnings("unchecked")
+        static ReplayLog load(String json) {
+            Object parsed = new Json(json).parse();
+            if (!(parsed instanceof List) || ((List<?>) parsed).size() != 2) {
+                throw new IllegalArgumentException("Expected [[metadata], [events]]");
+            }
+            List<?> root = (List<?>) parsed;
+            if (!(root.get(0) instanceof List) || ((List<?>) root.get(0)).size() != 1
+                    || !(((List<?>) root.get(0)).get(0) instanceof Map)
+                    || !(root.get(1) instanceof List)) {
+                throw new IllegalArgumentException("Expected one metadata object and an event array");
+            }
+            Map<String, Object> metadata = (Map<String, Object>) ((List<?>) root.get(0)).get(0);
+            long start = number(metadata, "startTime");
+            Instant anchor = metadata.containsKey("recordingStartTime")
+                    ? Instant.parse(string(metadata, "recordingStartTime")) : Instant.EPOCH;
+            String text = metadata.containsKey("initialText") ? string(metadata, "initialText") : "";
+            List<String> lines = new ArrayList<>();
+            lines.add(anchor + " session initialText=" + LoggingFilter.quote(text));
+            int index = 0;
+            for (Object item : (List<?>) root.get(1)) {
+                index++;
+                try {
+                    if (!(item instanceof Map)) throw new IllegalArgumentException("event must be an object");
+                    Map<String, Object> event = (Map<String, Object>) item;
+                    String tag = string(event, "event");
+                    if (!tag.startsWith("<") || !tag.endsWith(">")) {
+                        throw new IllegalArgumentException("invalid event name");
+                    }
+                    String method = tag.substring(1, tag.length() - 1);
+                    if (!IDS.containsKey(method)) throw new IllegalArgumentException("unknown event " + tag);
+                    if (number(event, "eventID") != IDS.get(method)) {
+                        throw new IllegalArgumentException("eventID does not match " + tag);
+                    }
+                    long elapsed = Math.subtractExact(number(event, "when"), start);
+                    if (elapsed < 0) throw new IllegalArgumentException("event precedes startTime");
+                    StringBuilder line = new StringBuilder(anchor.plusNanos(elapsed) + " " + method);
+                    switch (method) {
+                        case "insertString": case "replace": case "remove":
+                            int offset = integer(event, "offset"), length = integer(event, "length");
+                            if (offset < 0 || length < 0 || offset > text.length() - length) {
+                                throw new IllegalArgumentException("edit outside document");
+                            }
+                            if (method.equals("insertString") && length != 0) {
+                                throw new IllegalArgumentException("insertString length must be zero");
+                            }
+                            String old = text.substring(offset, offset + length);
+                            String replacement = method.equals("remove") ? null
+                                    : event.get("str") == null ? null : string(event, "str");
+                            line.append(" offset=").append(offset).append(" length=").append(length)
+                                    .append(" text=").append(LoggingFilter.quote(replacement))
+                                    .append(" oldText=").append(LoggingFilter.quote(old));
+                            text = text.substring(0, offset) + (replacement == null ? "" : replacement)
+                                    + text.substring(offset + length);
+                            break;
+                        case "caretUpdate":
+                            line.append(" dot=").append(integer(event, "dot"))
+                                    .append(" mark=").append(integer(event, "mark"));
+                            break;
+                        case "scrollChange":
+                            line.append(" x=").append(integer(event, "viewX"))
+                                    .append(" y=").append(integer(event, "viewY"));
+                            break;
+                        case "keyPressed": case "keyReleased":
+                            line.append(" keyCode=").append(integer(event, "keyCode"));
+                            for (String key : List.of("keyText", "keyChar", "modifiersText")) {
+                                if (event.containsKey(key)) line.append(" ").append(key).append("=")
+                                        .append(LoggingFilter.quote(string(event, key)));
+                            }
+                            for (String key : List.of("modifiers", "keyLocation")) {
+                                if (event.containsKey(key)) line.append(" ").append(key).append("=")
+                                        .append(integer(event, key));
+                            }
+                            break;
+                    }
+                    lines.add(line.toString());
+                } catch (RuntimeException exception) {
+                    throw new IllegalArgumentException("Invalid JSON event " + index + ": "
+                            + exception.getMessage(), exception);
+                }
+            }
+            ReplayLog replay = ReplayLog.parse(lines);
+            replay.metadata.putAll(metadata);
+            return replay;
+        }
+
+        static long number(Map<String, Object> object, String key) {
+            Object value = object.get(key);
+            if (!(value instanceof Long) && !(value instanceof Integer)) {
+                throw new IllegalArgumentException("Expected integer " + key);
+            }
+            return ((Number) value).longValue();
+        }
+
+        static int integer(Map<String, Object> object, String key) {
+            return Math.toIntExact(number(object, key));
+        }
+
+        static String string(Map<String, Object> object, String key) {
+            Object value = object.get(key);
+            if (!(value instanceof String)) throw new IllegalArgumentException("Expected string " + key);
+            return (String) value;
+        }
+    }
+
+    /** Small strict JSON reader/writer, so source launching needs no external library. */
+    static class Json {
+        final String input;
+        int position;
+        Json(String input) { this.input = input; }
+
+        Object parse() {
+            Object value = value();
+            whitespace();
+            if (position != input.length()) throw error("trailing input");
+            return value;
+        }
+
+        IllegalArgumentException error(String message) {
+            return new IllegalArgumentException("JSON at character " + position + ": " + message);
+        }
+
+        void whitespace() {
+            while (position < input.length() && " \n\r\t".indexOf(input.charAt(position)) >= 0) position++;
+        }
+
+        boolean take(char c) {
+            whitespace();
+            if (position < input.length() && input.charAt(position) == c) { position++; return true; }
+            return false;
+        }
+
+        void expect(char c) { if (!take(c)) throw error("expected " + c); }
+
+        Object value() {
+            whitespace();
+            if (position == input.length()) throw error("missing value");
+            char c = input.charAt(position);
+            if (c == '"') return string();
+            if (take('[')) {
+                List<Object> values = new ArrayList<>();
+                if (take(']')) return values;
+                do { values.add(value()); } while (take(','));
+                expect(']');
+                return values;
+            }
+            if (take('{')) {
+                Map<String, Object> values = new LinkedHashMap<>();
+                if (take('}')) return values;
+                do {
+                    whitespace();
+                    String key = string();
+                    expect(':');
+                    if (values.containsKey(key)) throw error("duplicate key " + key);
+                    values.put(key, value());
+                } while (take(','));
+                expect('}');
+                return values;
+            }
+            for (String literal : List.of("null", "true", "false")) {
+                if (input.startsWith(literal, position)) {
+                    position += literal.length();
+                    return literal.equals("null") ? null : Boolean.valueOf(literal);
+                }
+            }
+            Matcher matcher = Pattern.compile("-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
+                    .matcher(input);
+            matcher.region(position, input.length());
+            if (!matcher.lookingAt()) throw error("invalid value");
+            String number = matcher.group();
+            position = matcher.end();
+            // Avoid a numeric ternary: Java would promote long values to double and lose nanosecond precision.
+            if (number.contains(".") || number.contains("e") || number.contains("E")) {
+                double result = Double.parseDouble(number);
+                if (!Double.isFinite(result)) throw error("non-finite number");
+                return result;
+            }
+            return Long.parseLong(number);
+        }
+
+        String string() {
+            expect('"');
+            StringBuilder result = new StringBuilder();
+            while (position < input.length()) {
+                char c = input.charAt(position++);
+                if (c == '"') return result.toString();
+                if (c < 32) throw error("unescaped control character");
+                if (c == '\\') {
+                    if (position == input.length()) throw error("unfinished escape");
+                    c = input.charAt(position++);
+                    switch (c) {
+                        case '"': case '\\': case '/': break;
+                        case 'n': c = '\n'; break;
+                        case 'r': c = '\r'; break;
+                        case 't': c = '\t'; break;
+                        case 'b': c = '\b'; break;
+                        case 'f': c = '\f'; break;
+                        case 'u':
+                            if (position + 4 > input.length()) throw error("unfinished unicode escape");
+                            c = (char) Integer.parseInt(input.substring(position, position + 4), 16);
+                            position += 4;
+                            break;
+                        default: throw error("unknown escape");
+                    }
+                }
+                result.append(c);
+            }
+            throw error("unterminated string");
+        }
+
+        static String quote(String value) {
+            StringBuilder result = new StringBuilder("\"");
+            for (int i = 0; i < value.length(); i++) {
+                char c = value.charAt(i);
+                switch (c) {
+                    case '"': result.append("\\\""); break;
+                    case '\\': result.append("\\\\"); break;
+                    case '\n': result.append("\\n"); break;
+                    case '\r': result.append("\\r"); break;
+                    case '\t': result.append("\\t"); break;
+                    default:
+                        if (c < 32 || Character.isSurrogate(c)) {
+                            result.append(String.format("\\u%04x", (int) c));
+                        } else result.append(c);
+                }
+            }
+            return result.append('"').toString();
+        }
+
+        static String stringify(Object value, int depth) {
+            if (value == null) return "null";
+            if (value instanceof String) return quote((String) value);
+            if (value instanceof Number || value instanceof Boolean) return value.toString();
+            List<String> children = new ArrayList<>();
+            boolean object = value instanceof Map;
+            if (object) {
+                for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
+                    children.add(quote((String) entry.getKey()) + ": " + stringify(entry.getValue(), depth + 1));
+                }
+            } else {
+                for (Object item : (List<?>) value) children.add(stringify(item, depth + 1));
+            }
+            String open = object ? "{" : "[", close = object ? "}" : "]";
+            if (children.isEmpty()) return open + close;
+            String indent = "  ".repeat(depth + 1);
+            return open + "\n" + indent + String.join(",\n" + indent, children)
+                    + "\n" + "  ".repeat(depth) + close;
+        }
     }
 }
