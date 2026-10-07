@@ -23,16 +23,15 @@ import javax.swing.Timer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import javax.swing.JDesktopPane;
-import javax.swing.JInternalFrame;
+import javax.swing.JTabbedPane;
+import javax.swing.JToolBar;
+import javax.swing.BorderFactory;
 import javax.swing.JMenu;
 import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
 import javax.swing.KeyStroke;
 import javax.swing.AbstractAction;
 import javax.swing.Action;
-import javax.swing.event.InternalFrameAdapter;
-import javax.swing.event.InternalFrameEvent;
 import java.awt.event.InputEvent;
 import java.time.Instant;
 import javax.swing.JButton;
@@ -53,6 +52,13 @@ public class ScriptLogLite {
     private static final Path LOG_PATH = Path.of("document-filter.json");
 
     public static void main(String[] args) throws Exception {
+        if (!java.awt.GraphicsEnvironment.isHeadless()) {
+            try {
+                javax.swing.UIManager.setLookAndFeel(javax.swing.UIManager.getSystemLookAndFeelClassName());
+            } catch (Exception exception) {
+                System.err.println("Using default appearance: " + exception.getMessage());
+            }
+        }
         if (args.length > 0 && args[0].equals("--replay")) {
             if (args.length < 2 || args.length > 3) {
                 throw new IllegalArgumentException("Usage: --replay LOG_FILE [SESSION_NUMBER]");
@@ -60,7 +66,7 @@ public class ScriptLogLite {
             ReplayLog replay = ReplayLog.load(Path.of(args[1]),
                     args.length == 3 ? Integer.parseInt(args[2]) : -1);
             SwingUtilities.invokeLater(() -> {
-                MdiApplication app = new MdiApplication();
+                TabbedApplication app = new TabbedApplication();
                 app.show();
                 app.addReplay(replay, Path.of(args[1]).getFileName().toString());
             });
@@ -95,37 +101,43 @@ public class ScriptLogLite {
             return;
         }
         SwingUtilities.invokeLater(() -> {
-            MdiApplication app = new MdiApplication();
+            TabbedApplication app = new TabbedApplication();
             app.show();
             app.addDocument(initialLog, initialLog == null ? null : Path.of(args[1]));
         });
     }
 
 
-    /** One application window, with runtime-created document and replay children. */
-    static class MdiApplication {
-        final JDesktopPane desktop = new JDesktopPane();
+    /** One application window with independent document and replay tabs. */
+    static class TabbedApplication {
+        final JTabbedPane tabs = new JTabbedPane();
+        final JToolBar toolbar = new JToolBar();
+        final Map<java.awt.Component, ReplayWindow> replays = new HashMap<>();
         final JMenuBar menus = new JMenuBar();
-        final JMenu windowMenu = new JMenu("Window");
+        final JMenu tabsMenu = new JMenu("Tabs");
         final JLabel status = new JLabel("Ready");
-        final List<DocumentFrame> documents = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final List<DocumentTab> documents = new java.util.concurrent.CopyOnWriteArrayList<>();
         final List<LoggingFilter> recordings = new java.util.concurrent.CopyOnWriteArrayList<>();
         final List<Action> documentActions = new ArrayList<>();
         final JFileChooser chooser = new JFileChooser();
         final Timer autosave;
         JFrame frame;
         int sequence;
-        int placement;
 
-        MdiApplication() {
-            desktop.setBackground(new java.awt.Color(60, 70, 80));
-            desktop.setPreferredSize(new Dimension(1100, 700));
+        TabbedApplication() {
+            tabs.setPreferredSize(new Dimension(1100, 700));
+            tabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
+            tabs.addChangeListener(event -> updateActions());
+            toolbar.setFloatable(false);
+            toolbar.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+            status.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
             chooser.setSelectedFile(new java.io.File("saved-document.json"));
             JMenu file = menu("File", KeyEvent.VK_F);
-            item(file, "New", KeyEvent.VK_N, false, () -> addDocument(null, null));
-            item(file, "Open Log…", KeyEvent.VK_O, false, () -> open(false));
+            toolbar.add(item(file, "New", KeyEvent.VK_N, false, () -> addDocument(null, null)));
+            toolbar.add(item(file, "Open Log…", KeyEvent.VK_O, false, () -> open(false)));
             file.addSeparator();
-            item(file, "Save Log", KeyEvent.VK_S, true, () -> save(activeDocument(), false));
+            toolbar.add(item(file, "Save Log", KeyEvent.VK_S, true, () -> save(activeDocument(), false)));
+            toolbar.addSeparator();
             Action saveAs = item(file, "Save Log As…", 0, true, () -> save(activeDocument(), true));
             saveAs.putValue(Action.ACCELERATOR_KEY,
                     KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK));
@@ -144,20 +156,21 @@ public class ScriptLogLite {
             item(editMenu, "Remove Selection / Next Character", 0, true, () -> activeDocument().remove());
 
             JMenu view = menu("View", KeyEvent.VK_V);
-            item(view, "Replay Current Log", KeyEvent.VK_R, true, () -> {
-                DocumentFrame document = activeDocument();
+            toolbar.add(item(view, "Replay Current Log", KeyEvent.VK_R, true, () -> {
+                DocumentTab document = activeDocument();
                 try {
-                    addReplay(ReplayLog.parse(new ArrayList<>(document.filter.entries)), document.getTitle());
+                    addReplay(ReplayLog.parse(new ArrayList<>(document.filter.entries)), document.title);
                 } catch (Exception exception) { showError(frame, exception); }
-            });
+            }));
             item(view, "Open Log for Replay…", 0, false, () -> open(true));
-            windowMenu.setMnemonic(KeyEvent.VK_W);
-            menus.add(windowMenu);
-            windowMenu.addMenuListener(new javax.swing.event.MenuListener() {
-                public void menuSelected(javax.swing.event.MenuEvent event) { rebuildWindowMenu(); }
+            tabsMenu.setMnemonic(KeyEvent.VK_T);
+            menus.add(tabsMenu);
+            tabsMenu.addMenuListener(new javax.swing.event.MenuListener() {
+                public void menuSelected(javax.swing.event.MenuEvent event) { rebuildTabsMenu(); }
                 public void menuDeselected(javax.swing.event.MenuEvent event) { }
                 public void menuCanceled(javax.swing.event.MenuEvent event) { }
             });
+            rebuildTabsMenu();
             JMenu help = menu("Help", KeyEvent.VK_H);
             item(help, "About", 0, false, () -> JOptionPane.showMessageDialog(frame,
                     "ScriptLogLite\nEach document has its own JSON edit history.\n"
@@ -165,7 +178,7 @@ public class ScriptLogLite {
                     "About", JOptionPane.INFORMATION_MESSAGE));
             updateActions();
             autosave = new Timer(500, event -> {
-                for (DocumentFrame document : documents) {
+                for (DocumentTab document : documents) {
                     try { document.filter.saveAutomatic(); }
                     catch (Exception exception) {
                         ((Timer) event.getSource()).stop();
@@ -206,7 +219,8 @@ public class ScriptLogLite {
                 @Override
                 public void windowClosing(java.awt.event.WindowEvent event) { exit(); }
             });
-            frame.add(desktop, java.awt.BorderLayout.CENTER);
+            frame.add(toolbar, java.awt.BorderLayout.NORTH);
+            frame.add(tabs, java.awt.BorderLayout.CENTER);
             frame.add(status, java.awt.BorderLayout.SOUTH);
             frame.pack();
             frame.setLocationRelativeTo(null);
@@ -220,32 +234,32 @@ public class ScriptLogLite {
             }));
         }
 
-        DocumentFrame activeDocument() {
-            JInternalFrame selected = desktop.getSelectedFrame();
-            return selected instanceof DocumentFrame ? (DocumentFrame) selected : null;
+        DocumentTab activeDocument() {
+            java.awt.Component selected = tabs.getSelectedComponent();
+            return selected instanceof DocumentTab ? (DocumentTab) selected : null;
         }
 
         void updateActions() {
             for (Action action : documentActions) action.setEnabled(activeDocument() != null);
-            DocumentFrame active = activeDocument();
+            DocumentTab active = activeDocument();
             status.setText(active == null ? "Ready — File → New or Open Log"
-                    : active.getTitle() + " — automatic log: " + active.filter.automaticPath.toAbsolutePath());
+                    : active.title + " — automatic log: " + active.filter.automaticPath.toAbsolutePath());
         }
 
-        DocumentFrame addDocument(ReplayLog loaded, Path path) {
+        DocumentTab addDocument(ReplayLog loaded, Path path) {
             int id = ++sequence;
             LoggingFilter filter = new LoggingFilter(new PrintWriter(java.io.OutputStream.nullOutputStream()));
             filter.automaticPath = id == 1 ? LOG_PATH
                     : Path.of("document-filter-" + java.util.UUID.randomUUID() + ".json");
             filter.write("session initialText=\"\"");
-            DocumentFrame document = new DocumentFrame(this, filter, "Untitled " + id);
+            DocumentTab document = new DocumentTab(this, filter, "Untitled " + id);
             if (loaded != null) restoreLog(document.text, filter, loaded);
             document.savedPath = path;
             document.savedEntries = loaded == null ? 1 : filter.entries.size();
             document.updateTitle();
             documents.add(document);
             recordings.add(filter);
-            addInternalFrame(document);
+            addTab(document, document.title);
             if (loaded != null) {
                 ReplayState state = loaded.states.get(loaded.states.size() - 1);
                 SwingUtilities.invokeLater(() -> restoreScroll(document.text, filter, state));
@@ -255,33 +269,56 @@ public class ScriptLogLite {
         }
 
         void addReplay(ReplayLog replay, String title) {
-            addInternalFrame(new ReplayWindow(replay).internalFrame(title));
+            ReplayWindow viewer = new ReplayWindow(replay);
+            JPanel panel = viewer.panel();
+            replays.put(panel, viewer);
+            addTab(panel, "Replay — " + title);
         }
 
-        /** Add any child window at runtime; the Window menu automatically includes it. */
-        void addInternalFrame(JInternalFrame child) {
-            child.setLocation(24 * (placement % 12), 24 * (placement++ % 12));
-            child.addInternalFrameListener(new InternalFrameAdapter() {
+        void addTab(java.awt.Component panel, String title) {
+            tabs.addTab(title, panel);
+            JPanel header = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 0));
+            header.setOpaque(false);
+            JLabel label = new JLabel(title);
+            JButton close = new JButton("×");
+            close.setToolTipText("Close tab");
+            close.setFocusable(false);
+            close.setBorder(BorderFactory.createEmptyBorder(2, 5, 2, 5));
+            close.setContentAreaFilled(false);
+            close.addActionListener(event -> closeTab(panel));
+            header.add(label);
+            header.add(close);
+            java.awt.event.MouseAdapter select = new java.awt.event.MouseAdapter() {
                 @Override
-                public void internalFrameActivated(InternalFrameEvent event) { updateActions(); }
-                @Override
-                public void internalFrameClosed(InternalFrameEvent event) {
-                    SwingUtilities.invokeLater(() -> updateActions());
-                }
-            });
-            desktop.add(child);
-            child.setVisible(true);
-            activate(child);
+                public void mousePressed(java.awt.event.MouseEvent event) { activate(panel); }
+            };
+            header.addMouseListener(select);
+            label.addMouseListener(select);
+            tabs.setTabComponentAt(tabs.indexOfComponent(panel), header);
+            activate(panel);
         }
 
-        void activate(JInternalFrame child) {
-            try {
-                child.setIcon(false);
-                child.setSelected(true);
-                child.moveToFront();
-                desktop.setSelectedFrame(child);
-            } catch (java.beans.PropertyVetoException exception) { showError(frame, exception); }
+        void renameTab(java.awt.Component panel, String title) {
+            int index = tabs.indexOfComponent(panel);
+            if (index < 0) return;
+            tabs.setTitleAt(index, title);
+            JPanel header = (JPanel) tabs.getTabComponentAt(index);
+            if (header != null) ((JLabel) header.getComponent(0)).setText(title);
+        }
+
+        void activate(java.awt.Component panel) {
+            tabs.setSelectedComponent(panel);
+            if (panel instanceof DocumentTab) ((DocumentTab) panel).text.requestFocusInWindow();
             updateActions();
+        }
+
+        boolean closeTab(java.awt.Component panel) {
+            if (panel instanceof DocumentTab) return closeDocument((DocumentTab) panel);
+            ReplayWindow viewer = replays.remove(panel);
+            if (viewer != null) viewer.pause();
+            tabs.remove(panel);
+            updateActions();
+            return true;
         }
 
         void open(boolean replay) {
@@ -294,7 +331,7 @@ public class ScriptLogLite {
             } catch (Exception exception) { showError(frame, exception); }
         }
 
-        boolean save(DocumentFrame document, boolean saveAs) {
+        boolean save(DocumentTab document, boolean saveAs) {
             if (document == null) return false;
             Path path = document.savedPath;
             if (saveAs || path == null) {
@@ -322,10 +359,10 @@ public class ScriptLogLite {
             } catch (Exception exception) { showError(frame, exception); return false; }
         }
 
-        boolean closeDocument(DocumentFrame document) {
+        boolean closeDocument(DocumentTab document) {
             if (document.filter.entries.size() != document.savedEntries) {
                 int answer = JOptionPane.showConfirmDialog(frame,
-                        "Save changes to " + document.getTitle() + "?", "Close Document",
+                        "Save changes to " + document.title + "?", "Close Document",
                         JOptionPane.YES_NO_CANCEL_OPTION);
                 if (answer == JOptionPane.CANCEL_OPTION || answer == JOptionPane.CLOSED_OPTION) return false;
                 if (answer == JOptionPane.YES_OPTION && !save(document, false)) return false;
@@ -333,22 +370,20 @@ public class ScriptLogLite {
             try { document.filter.saveAutomatic(); }
             catch (Exception exception) { showError(frame, exception); return false; }
             documents.remove(document);
-            document.dispose();
+            tabs.remove(document);
+            document.filter.onRecord = () -> { };
             updateActions();
             return true;
         }
 
         void closeActive() {
-            JInternalFrame active = desktop.getSelectedFrame();
-            if (active instanceof DocumentFrame) closeDocument((DocumentFrame) active);
-            else if (active != null) active.dispose();
+            java.awt.Component active = tabs.getSelectedComponent();
+            if (active != null) closeTab(active);
         }
 
         boolean closeAll() {
-            for (JInternalFrame child : desktop.getAllFrames()) {
-                if (child instanceof DocumentFrame) {
-                    if (!closeDocument((DocumentFrame) child)) return false;
-                } else child.dispose();
+            while (tabs.getTabCount() > 0) {
+                if (!closeTab(tabs.getComponentAt(0))) return false;
             }
             return true;
         }
@@ -359,64 +394,53 @@ public class ScriptLogLite {
             if (frame != null) frame.dispose();
         }
 
-        void arrange(boolean tile) {
-            List<JInternalFrame> children = new ArrayList<>();
-            for (JInternalFrame child : desktop.getAllFrames()) if (!child.isIcon()) children.add(child);
-            int count = children.size();
-            int columns = Math.max(1, (int) Math.ceil(Math.sqrt(count)));
-            int rows = Math.max(1, (int) Math.ceil((double) count / columns));
-            for (int i = 0; i < count; i++) {
-                JInternalFrame child = children.get(i);
-                try { child.setMaximum(false); }
-                catch (java.beans.PropertyVetoException exception) { continue; }
-                if (tile) child.setBounds((i % columns) * desktop.getWidth() / columns,
-                        (i / columns) * desktop.getHeight() / rows,
-                        desktop.getWidth() / columns, desktop.getHeight() / rows);
-                else child.setBounds(i * 28, i * 28,
-                        Math.max(300, desktop.getWidth() - count * 28),
-                        Math.max(200, desktop.getHeight() - count * 28));
-            }
+        void cycleTab(int direction) {
+            int count = tabs.getTabCount();
+            if (count > 0) tabs.setSelectedIndex(Math.floorMod(tabs.getSelectedIndex() + direction, count));
         }
 
-        void rebuildWindowMenu() {
-            windowMenu.removeAll();
-            item(windowMenu, "Cascade", 0, false, () -> arrange(false));
-            item(windowMenu, "Tile", 0, false, () -> arrange(true));
-            item(windowMenu, "Close All", 0, false, this::closeAll);
-            windowMenu.addSeparator();
-            for (JInternalFrame child : desktop.getAllFrames()) {
-                item(windowMenu, child.getTitle(), 0, false, () -> activate(child));
+        void rebuildTabsMenu() {
+            tabsMenu.removeAll();
+            Action next = item(tabsMenu, "Next Tab", 0, false, () -> cycleTab(1));
+            next.putValue(Action.ACCELERATOR_KEY, KeyStroke.getKeyStroke(KeyEvent.VK_PAGE_DOWN,
+                    InputEvent.CTRL_DOWN_MASK));
+            Action previous = item(tabsMenu, "Previous Tab", 0, false, () -> cycleTab(-1));
+            previous.putValue(Action.ACCELERATOR_KEY, KeyStroke.getKeyStroke(KeyEvent.VK_PAGE_UP,
+                    InputEvent.CTRL_DOWN_MASK));
+            item(tabsMenu, "Close All", 0, false, this::closeAll);
+            tabsMenu.addSeparator();
+            for (int i = 0; i < tabs.getTabCount(); i++) {
+                java.awt.Component panel = tabs.getComponentAt(i);
+                item(tabsMenu, tabs.getTitleAt(i), 0, false, () -> activate(panel));
             }
         }
     }
 
-    static class DocumentFrame extends JInternalFrame {
-        final MdiApplication owner;
+    static class DocumentTab extends JPanel {
+        final TabbedApplication owner;
         final LoggingFilter filter;
         final JTextArea text;
         final String untitled;
         Path savedPath;
         int savedEntries;
+        String title;
 
-        DocumentFrame(MdiApplication owner, LoggingFilter filter, String untitled) {
-            super(untitled, true, true, true, true);
+        DocumentTab(TabbedApplication owner, LoggingFilter filter, String untitled) {
+            super(new java.awt.BorderLayout());
+            title = untitled;
             this.owner = owner;
             this.filter = filter;
             this.untitled = untitled;
             filter.onRecord = this::updateTitle;
             text = createTextArea(filter);
             add(createScrollPane(text, filter), java.awt.BorderLayout.CENTER);
-            setSize(720, 450);
-            setDefaultCloseOperation(JInternalFrame.DO_NOTHING_ON_CLOSE);
-            addInternalFrameListener(new InternalFrameAdapter() {
-                @Override
-                public void internalFrameClosing(InternalFrameEvent event) { owner.closeDocument(DocumentFrame.this); }
-            });
+
         }
 
         void updateTitle() {
             String name = savedPath == null ? untitled : savedPath.getFileName().toString();
-            setTitle(name + (filter.entries.size() != savedEntries ? " *" : ""));
+            title = name + (filter.entries.size() != savedEntries ? " *" : "");
+            owner.renameTab(this, title);
         }
         AbstractDocument document() { return (AbstractDocument) text.getDocument(); }
         void insert() { edit(() -> document().insertString(text.getCaretPosition(), "Hello", null)); }
@@ -515,6 +539,8 @@ public class ScriptLogLite {
 
     private static JTextArea createTextArea(LoggingFilter filter) {
         JTextArea text = new JTextArea(12, 50);
+        text.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, java.awt.Font.PLAIN, 16));
+        text.setMargin(new java.awt.Insets(12, 12, 12, 12));
         filter.metadata.putIfAbsent("fontFamily", text.getFont().getFamily());
         filter.metadata.putIfAbsent("fontSize", text.getFont().getSize());
         text.addComponentListener(new java.awt.event.ComponentAdapter() {
@@ -935,7 +961,7 @@ public class ScriptLogLite {
             status.setToolTipText(state.time + " " + state.description);
         }
 
-        JInternalFrame internalFrame(String title) {
+        JPanel panel() {
             JButton forward = new JButton("Next edit");
             forward.addActionListener(event -> seek(log.nextEdit(position)));
             JButton backward = new JButton("Previous edit");
@@ -949,17 +975,12 @@ public class ScriptLogLite {
             controls.add(new JLabel("Speed ×"));
             controls.add(speed);
             controls.add(reset);
-            JInternalFrame frame = new JInternalFrame("Replay — " + title, true, true, true, true);
-            frame.setDefaultCloseOperation(JInternalFrame.DISPOSE_ON_CLOSE);
-            frame.addInternalFrameListener(new InternalFrameAdapter() {
-                @Override
-                public void internalFrameClosed(InternalFrameEvent event) { pause(); }
-            });
+            JPanel frame = new JPanel(new java.awt.BorderLayout(0, 8));
+            status.setBorder(BorderFactory.createEmptyBorder(8, 10, 0, 10));
             frame.add(status, java.awt.BorderLayout.NORTH);
             frame.add(scroll, java.awt.BorderLayout.CENTER);
             frame.add(controls, java.awt.BorderLayout.SOUTH);
             render();
-            frame.setSize(900, 400);
             return frame;
         }
     }
@@ -1030,19 +1051,19 @@ public class ScriptLogLite {
         testSaveAndContinue(lines.subList(0, 3), special);
         testScroll();
         testJson();
-        testMdi();
+        testTabs();
         System.out.println("Replay self-test passed");
     }
 
-    static void testMdi() throws Exception {
+    static void testTabs() throws Exception {
         Path directory = Files.createTempDirectory("mdi-document-test");
         try {
             SwingUtilities.invokeAndWait(() -> {
                 try {
-                    MdiApplication app = new MdiApplication();
-                    app.desktop.setSize(1000, 700);
-                    DocumentFrame first = app.addDocument(null, null);
-                    DocumentFrame second = app.addDocument(null, null);
+                    TabbedApplication app = new TabbedApplication();
+                    app.tabs.setSize(1000, 700);
+                    DocumentTab first = app.addDocument(null, null);
+                    DocumentTab second = app.addDocument(null, null);
                     first.filter.automaticPath = directory.resolve("first-auto.json");
                     second.filter.automaticPath = directory.resolve("second-auto.json");
                     first.text.setText("First document");
@@ -1062,36 +1083,46 @@ public class ScriptLogLite {
                             "second automatic log");
                     Path saved = directory.resolve("saved.json");
                     first.filter.save(saved);
-                    DocumentFrame reopened = app.addDocument(ReplayLog.load(saved, -1), saved);
+                    DocumentTab reopened = app.addDocument(ReplayLog.load(saved, -1), saved);
                     reopened.filter.automaticPath = directory.resolve("reopened-auto.json");
                     check(reopened.text.getText().equals(first.text.getText()) && app.documents.size() == 3,
                             "open adds a document without replacing other documents");
                     reopened.text.append(" continued");
                     check(!first.text.getText().endsWith("continued"), "reopened log is independent");
                     ReplayWindow replay = new ReplayWindow(ReplayLog.parse(first.filter.entries));
-                    JInternalFrame replayFrame = replay.internalFrame("First document");
-                    app.addInternalFrame(replayFrame);
+                    JPanel replayPanel = replay.panel();
+                    app.replays.put(replayPanel, replay);
+                    app.addTab(replayPanel, "Replay — First document");
                     check(app.activeDocument() == null, "replay does not target an editor");
                     check(app.documentActions.stream().noneMatch(Action::isEnabled),
                             "editor menu actions disabled for replay");
                     replay.timer.start();
-                    replayFrame.dispose();
+                    app.closeTab(replayPanel);
                     check(!replay.timer.isRunning(), "closing replay stops playback");
-                    app.arrange(true);
-                    check(first.getWidth() > 0 && first.getHeight() > 0, "tile layout");
-                    app.arrange(false);
-                    check(!first.getLocation().equals(second.getLocation()), "cascade layout");
-                    app.rebuildWindowMenu();
-                    check(app.windowMenu.getItemCount() == 7, "dynamic window list");
+                    app.activate(first);
+                    app.cycleTab(1);
+                    check(app.activeDocument() == second, "next tab navigation");
+                    app.cycleTab(-1);
+                    check(app.activeDocument() == first, "previous tab navigation");
+                    check(app.tabs.getTitleAt(app.tabs.indexOfComponent(first)).endsWith(" *"),
+                            "unsaved tab title");
+                    app.rebuildTabsMenu();
+                    check(app.tabsMenu.getItemCount() == 7, "dynamic tab list");
                     app.activate(second);
                     check(app.documentActions.stream().allMatch(Action::isEnabled),
                             "editor menu actions enabled for document");
-                    for (DocumentFrame document : new ArrayList<>(app.documents)) {
+                    second.savedEntries = second.filter.entries.size();
+                    app.activate(first);
+                    JPanel secondHeader = (JPanel) app.tabs.getTabComponentAt(app.tabs.indexOfComponent(second));
+                    ((JButton) secondHeader.getComponent(1)).doClick();
+                    check(app.tabs.indexOfComponent(second) == -1 && app.activeDocument() == first,
+                            "close button closes its own tab while preserving the selected document");
+                    for (DocumentTab document : new ArrayList<>(app.documents)) {
                         document.savedEntries = document.filter.entries.size();
-                        check(app.closeDocument(document), "close internal document");
+                        check(app.closeDocument(document), "close document tab");
                     }
-                    check(app.desktop.getAllFrames().length == 0 && app.documents.isEmpty(),
-                            "all internal frames closed");
+                    check(app.tabs.getTabCount() == 0 && app.documents.isEmpty(),
+                            "all tabs closed");
                 } catch (Exception exception) {
                     throw new RuntimeException(exception);
                 }

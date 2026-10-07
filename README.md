@@ -7,24 +7,26 @@ presses/releases, and scrolling. Requires a JDK (Java 11 or newer):
 java src/main/java/se/lu/scriptloglite/ScriptLogLite.java
 ```
 
-The main `JFrame` contains a `JDesktopPane`. Documents and replay viewers are
-resizable, closable, maximizable, and minimizable `JInternalFrame` windows added
-at runtime. New and Open Log each create a separate document, with independent
-text, selection, scroll position, and logging history.
+The main `JFrame` contains a `JTabbedPane`. Each document and replay viewer has
+its own closable tab. New and Open Log create separate documents with independent
+text, selection, scroll position, and logging history. Tabs scroll when there
+are too many to fit. A compact toolbar provides New, Open, Save, and Replay.
+The application uses the platform's system look and feel, with a larger editor
+font and padding.
 
 The menus provide:
 
 - **File**: New, Open Log, Save Log, Save Log As, Close, Exit.
 - **Edit**: Cut, Copy, Paste, Select All, and example insert/replace/remove commands.
 - **View**: Replay Current Log and Open Log for Replay.
-- **Window**: Cascade, Tile, Close All, and a list of open internal frames.
+- **Tabs**: Next Tab, Previous Tab, Close All, and a list of open tabs.
 - **Help**: About.
 
 Common commands have Ctrl keyboard shortcuts, including Ctrl+N, Ctrl+O, Ctrl+S,
-Ctrl+Shift+S, and Ctrl+W. Document commands operate on the selected document and
+Ctrl+Shift+S, and Ctrl+W. Ctrl+PageDown and Ctrl+PageUp switch tabs. Document commands operate on the selected document and
 are disabled when a replay viewer is selected. An asterisk marks unsaved log
 events. Closing a document or exiting offers Save / Discard / Cancel for changed
-histories. Replay timers stop when their internal frames close.
+histories. Replay timers stop when their tabs close.
 
 Type, paste, delete, or use the Edit menu's insert/replace/remove commands. The filter
 allows edits through. Swing often calls `replace` for typing. Document operations
@@ -85,7 +87,7 @@ the edit sequence, so saved JSON does not need `oldText` fields.
 **Save Log As…** chooses another filename. **Open Log…** restores text,
 caret, selection, and scroll position, then lets you continue editing. Saving
 again retains earlier events and adds new ones. No separate document file is
-needed. Opening adds a new internal frame and keeps existing documents open.
+needed. Opening adds a new tab and keeps existing documents open.
 Save As asks before replacing an existing file.
 
 ```sh
@@ -115,7 +117,7 @@ one session; its session number is always 1.
 ## Replay
 
 **Replay current log** replays the current history, including unsaved edits.
-Replay viewers open as internal frames alongside the documents.
+Replay viewers open as tabs alongside the documents.
 You can also open a saved log directly for replay:
 
 ```sh
@@ -148,9 +150,9 @@ java -Djava.awt.headless=true src/main/java/se/lu/scriptloglite/ScriptLogLite.ja
 
 Checks cover editing, Unicode/escaping, forward/backward replay, timing/speeds,
 session selection, save/open/continue, scrolling, invalid JSON, and round trips
-of all 1,259 events in the supplied sample (when present). MDI checks cover
+of all 1,259 events in the supplied sample (when present). Tabbed-workspace checks cover
 independent documents and automatic logs, opening additional documents, active
-menu commands, window layouts/listing, and closing replay timers.
+menu commands, tab navigation/listing, and closing replay timers.
 
 The main class is `se.lu.scriptloglite.ScriptLogLite`. Alternatively compile and
 run it from the repository root:
