@@ -1,3 +1,5 @@
+package se.lu.scriptloglite;
+
 import java.awt.Point;
 import java.awt.Dimension;
 import java.awt.event.KeyAdapter;
@@ -21,7 +23,17 @@ import javax.swing.Timer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
+import javax.swing.JDesktopPane;
+import javax.swing.JInternalFrame;
+import javax.swing.JMenu;
+import javax.swing.JMenuBar;
+import javax.swing.JMenuItem;
+import javax.swing.KeyStroke;
+import javax.swing.AbstractAction;
+import javax.swing.Action;
+import javax.swing.event.InternalFrameAdapter;
+import javax.swing.event.InternalFrameEvent;
+import java.awt.event.InputEvent;
 import java.time.Instant;
 import javax.swing.JButton;
 import javax.swing.JFrame;
@@ -37,7 +49,7 @@ import javax.swing.text.BadLocationException;
 import javax.swing.text.DocumentFilter;
 
 /** Logs DocumentFilter editing methods and text-area caret and key events. */
-public class DocumentFilterLogger {
+public class ScriptLogLite {
     private static final Path LOG_PATH = Path.of("document-filter.json");
 
     public static void main(String[] args) throws Exception {
@@ -47,7 +59,11 @@ public class DocumentFilterLogger {
             }
             ReplayLog replay = ReplayLog.load(Path.of(args[1]),
                     args.length == 3 ? Integer.parseInt(args[2]) : -1);
-            SwingUtilities.invokeLater(() -> new ReplayWindow(replay).show());
+            SwingUtilities.invokeLater(() -> {
+                MdiApplication app = new MdiApplication();
+                app.show();
+                app.addReplay(replay, Path.of(args[1]).getFileName().toString());
+            });
             return;
         }
         if (args.length == 1 && args[0].equals("--self-test")) {
@@ -63,17 +79,9 @@ public class DocumentFilterLogger {
                     args.length == 3 ? Integer.parseInt(args[2]) : -1);
         }
         final ReplayLog initialLog = opened;
-        PrintWriter log = new PrintWriter(java.io.OutputStream.nullOutputStream());
-        LoggingFilter filter = new LoggingFilter(log);
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            try { filter.saveAutomatic(); }
-            catch (Exception exception) { System.err.println(exception.getMessage()); }
-            log.close();
-        }));
-        filter.write("session initialText=" + LoggingFilter.quote(""));
-        System.out.println("Logging to " + LOG_PATH.toAbsolutePath());
-
         if (args.length == 1 && args[0].equals("--demo")) {
+            LoggingFilter filter = new LoggingFilter(new PrintWriter(java.io.OutputStream.nullOutputStream()));
+            filter.write("session initialText=\"\"");
             SwingUtilities.invokeAndWait(() -> edit(() -> {
                 JTextArea text = createTextArea(filter);
                 AbstractDocument document = (AbstractDocument) text.getDocument();
@@ -84,106 +92,342 @@ public class DocumentFilterLogger {
                 document.remove(0, 5);
             }));
             filter.saveAutomatic();
-            log.close();
             return;
         }
         SwingUtilities.invokeLater(() -> {
-            showWindow(filter, initialLog);
-            Timer autosave = new Timer(500, event -> {
-                try { filter.saveAutomatic(); }
-                catch (Exception exception) {
-                    ((Timer) event.getSource()).stop();
-                    showError(null, exception);
-                }
-            });
-            autosave.start();
+            MdiApplication app = new MdiApplication();
+            app.show();
+            app.addDocument(initialLog, initialLog == null ? null : Path.of(args[1]));
         });
     }
 
-    private static void showWindow(LoggingFilter filter, ReplayLog initialLog) {
-        JTextArea text = createTextArea(filter);
-        JScrollPane scroll = createScrollPane(text, filter);
-        AbstractDocument document = (AbstractDocument) text.getDocument();
-        if (initialLog != null) restoreLog(text, filter, initialLog);
-        JFrame frame = new JFrame("DocumentFilter logger");
-        JLabel status = new JLabel("Log contains the document and edit history.");
-        JFileChooser chooser = new JFileChooser();
-        chooser.setSelectedFile(new java.io.File("saved-document.json"));
 
-        JPanel buttons = new JPanel();
-        JButton insert = new JButton("insertString");
-        insert.addActionListener(event -> edit(() ->
-                document.insertString(text.getCaretPosition(), "Hello", null)));
-        JButton replace = new JButton("replace");
-        replace.addActionListener(event -> edit(() -> document.replace(
-                text.getSelectionStart(),
-                text.getSelectionEnd() - text.getSelectionStart(), "World", null)));
-        JButton remove = new JButton("remove");
-        remove.addActionListener(event -> edit(() -> {
-            int start = text.getSelectionStart();
-            int length = text.getSelectionEnd() - start;
-            if (length == 0 && start < document.getLength()) {
-                length = 1;
+    /** One application window, with runtime-created document and replay children. */
+    static class MdiApplication {
+        final JDesktopPane desktop = new JDesktopPane();
+        final JMenuBar menus = new JMenuBar();
+        final JMenu windowMenu = new JMenu("Window");
+        final JLabel status = new JLabel("Ready");
+        final List<DocumentFrame> documents = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final List<LoggingFilter> recordings = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final List<Action> documentActions = new ArrayList<>();
+        final JFileChooser chooser = new JFileChooser();
+        final Timer autosave;
+        JFrame frame;
+        int sequence;
+        int placement;
+
+        MdiApplication() {
+            desktop.setBackground(new java.awt.Color(60, 70, 80));
+            desktop.setPreferredSize(new Dimension(1100, 700));
+            chooser.setSelectedFile(new java.io.File("saved-document.json"));
+            JMenu file = menu("File", KeyEvent.VK_F);
+            item(file, "New", KeyEvent.VK_N, false, () -> addDocument(null, null));
+            item(file, "Open Log…", KeyEvent.VK_O, false, () -> open(false));
+            file.addSeparator();
+            item(file, "Save Log", KeyEvent.VK_S, true, () -> save(activeDocument(), false));
+            Action saveAs = item(file, "Save Log As…", 0, true, () -> save(activeDocument(), true));
+            saveAs.putValue(Action.ACCELERATOR_KEY,
+                    KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK));
+            file.addSeparator();
+            item(file, "Close", KeyEvent.VK_W, false, this::closeActive);
+            item(file, "Exit", KeyEvent.VK_Q, false, this::exit);
+
+            JMenu editMenu = menu("Edit", KeyEvent.VK_E);
+            item(editMenu, "Cut", KeyEvent.VK_X, true, () -> activeDocument().text.cut());
+            item(editMenu, "Copy", KeyEvent.VK_C, true, () -> activeDocument().text.copy());
+            item(editMenu, "Paste", KeyEvent.VK_V, true, () -> activeDocument().text.paste());
+            item(editMenu, "Select All", KeyEvent.VK_A, true, () -> activeDocument().text.selectAll());
+            editMenu.addSeparator();
+            item(editMenu, "Insert Hello", 0, true, () -> activeDocument().insert());
+            item(editMenu, "Replace Selection with World", 0, true, () -> activeDocument().replace());
+            item(editMenu, "Remove Selection / Next Character", 0, true, () -> activeDocument().remove());
+
+            JMenu view = menu("View", KeyEvent.VK_V);
+            item(view, "Replay Current Log", KeyEvent.VK_R, true, () -> {
+                DocumentFrame document = activeDocument();
+                try {
+                    addReplay(ReplayLog.parse(new ArrayList<>(document.filter.entries)), document.getTitle());
+                } catch (Exception exception) { showError(frame, exception); }
+            });
+            item(view, "Open Log for Replay…", 0, false, () -> open(true));
+            windowMenu.setMnemonic(KeyEvent.VK_W);
+            menus.add(windowMenu);
+            windowMenu.addMenuListener(new javax.swing.event.MenuListener() {
+                public void menuSelected(javax.swing.event.MenuEvent event) { rebuildWindowMenu(); }
+                public void menuDeselected(javax.swing.event.MenuEvent event) { }
+                public void menuCanceled(javax.swing.event.MenuEvent event) { }
+            });
+            JMenu help = menu("Help", KeyEvent.VK_H);
+            item(help, "About", 0, false, () -> JOptionPane.showMessageDialog(frame,
+                    "ScriptLogLite\nEach document has its own JSON edit history.\n"
+                    + "Save and open logs to continue writing, or replay them at any speed.",
+                    "About", JOptionPane.INFORMATION_MESSAGE));
+            updateActions();
+            autosave = new Timer(500, event -> {
+                for (DocumentFrame document : documents) {
+                    try { document.filter.saveAutomatic(); }
+                    catch (Exception exception) {
+                        ((Timer) event.getSource()).stop();
+                        showError(frame, exception);
+                        return;
+                    }
+                }
+            });
+        }
+
+        JMenu menu(String name, int mnemonic) {
+            JMenu menu = new JMenu(name);
+            menu.setMnemonic(mnemonic);
+            menus.add(menu);
+            return menu;
+        }
+
+        Action item(JMenu menu, String name, int key, boolean requiresDocument, Runnable command) {
+            Action action = new AbstractAction(name) {
+                @Override
+                public void actionPerformed(java.awt.event.ActionEvent event) {
+                    if (!requiresDocument || activeDocument() != null) command.run();
+                    updateActions();
+                }
+            };
+            if (key != 0) action.putValue(Action.ACCELERATOR_KEY,
+                    KeyStroke.getKeyStroke(key, InputEvent.CTRL_DOWN_MASK));
+            menu.add(new JMenuItem(action));
+            if (requiresDocument) documentActions.add(action);
+            return action;
+        }
+
+        void show() {
+            frame = new JFrame("ScriptLogLite");
+            frame.setJMenuBar(menus);
+            frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+            frame.addWindowListener(new java.awt.event.WindowAdapter() {
+                @Override
+                public void windowClosing(java.awt.event.WindowEvent event) { exit(); }
+            });
+            frame.add(desktop, java.awt.BorderLayout.CENTER);
+            frame.add(status, java.awt.BorderLayout.SOUTH);
+            frame.pack();
+            frame.setLocationRelativeTo(null);
+            frame.setVisible(true);
+            autosave.start();
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                for (LoggingFilter recording : recordings) {
+                    try { recording.saveAutomatic(); }
+                    catch (Exception exception) { System.err.println(exception.getMessage()); }
+                }
+            }));
+        }
+
+        DocumentFrame activeDocument() {
+            JInternalFrame selected = desktop.getSelectedFrame();
+            return selected instanceof DocumentFrame ? (DocumentFrame) selected : null;
+        }
+
+        void updateActions() {
+            for (Action action : documentActions) action.setEnabled(activeDocument() != null);
+            DocumentFrame active = activeDocument();
+            status.setText(active == null ? "Ready — File → New or Open Log"
+                    : active.getTitle() + " — automatic log: " + active.filter.automaticPath.toAbsolutePath());
+        }
+
+        DocumentFrame addDocument(ReplayLog loaded, Path path) {
+            int id = ++sequence;
+            LoggingFilter filter = new LoggingFilter(new PrintWriter(java.io.OutputStream.nullOutputStream()));
+            filter.automaticPath = id == 1 ? LOG_PATH
+                    : Path.of("document-filter-" + java.util.UUID.randomUUID() + ".json");
+            filter.write("session initialText=\"\"");
+            DocumentFrame document = new DocumentFrame(this, filter, "Untitled " + id);
+            if (loaded != null) restoreLog(document.text, filter, loaded);
+            document.savedPath = path;
+            document.savedEntries = loaded == null ? 1 : filter.entries.size();
+            document.updateTitle();
+            documents.add(document);
+            recordings.add(filter);
+            addInternalFrame(document);
+            if (loaded != null) {
+                ReplayState state = loaded.states.get(loaded.states.size() - 1);
+                SwingUtilities.invokeLater(() -> restoreScroll(document.text, filter, state));
             }
-            document.remove(start, length);
-        }));
-        buttons.add(insert);
-        buttons.add(replace);
-        buttons.add(remove);
+            document.text.requestFocusInWindow();
+            return document;
+        }
 
-        JButton save = new JButton("Save Log…");
-        save.addActionListener(event -> {
-            if (chooser.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) return;
-            Path path = chooser.getSelectedFile().toPath();
-            if (Files.exists(path) && JOptionPane.showConfirmDialog(frame,
-                    "Replace " + path + "?", "Save Log", JOptionPane.YES_NO_OPTION)
-                    != JOptionPane.YES_OPTION) return;
+        void addReplay(ReplayLog replay, String title) {
+            addInternalFrame(new ReplayWindow(replay).internalFrame(title));
+        }
+
+        /** Add any child window at runtime; the Window menu automatically includes it. */
+        void addInternalFrame(JInternalFrame child) {
+            child.setLocation(24 * (placement % 12), 24 * (placement++ % 12));
+            child.addInternalFrameListener(new InternalFrameAdapter() {
+                @Override
+                public void internalFrameActivated(InternalFrameEvent event) { updateActions(); }
+                @Override
+                public void internalFrameClosed(InternalFrameEvent event) {
+                    SwingUtilities.invokeLater(() -> updateActions());
+                }
+            });
+            desktop.add(child);
+            child.setVisible(true);
+            activate(child);
+        }
+
+        void activate(JInternalFrame child) {
             try {
-                filter.save(path);
-                status.setText("Saved " + path.toAbsolutePath());
-            } catch (Exception exception) {
-                showError(frame, exception);
-            }
-        });
-        JButton open = new JButton("Open Log…");
-        open.addActionListener(event -> {
+                child.setIcon(false);
+                child.setSelected(true);
+                child.moveToFront();
+                desktop.setSelectedFrame(child);
+            } catch (java.beans.PropertyVetoException exception) { showError(frame, exception); }
+            updateActions();
+        }
+
+        void open(boolean replay) {
             if (chooser.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) return;
+            Path path = chooser.getSelectedFile().toPath();
             try {
-                Path path = chooser.getSelectedFile().toPath();
                 ReplayLog loaded = ReplayLog.load(path, -1);
-                if (JOptionPane.showConfirmDialog(frame,
-                        "Open this log and replace the current session? Save your current log first "
-                        + "if you want to keep it.", "Open Log", JOptionPane.OK_CANCEL_OPTION)
-                        != JOptionPane.OK_OPTION) return;
-                restoreLog(text, filter, loaded);
-                status.setText("Opened " + path.toAbsolutePath() + " — continue editing, then Save Log.");
-                text.requestFocusInWindow();
-            } catch (Exception exception) {
-                showError(frame, exception);
+                if (replay) addReplay(loaded, path.getFileName().toString());
+                else addDocument(loaded, path);
+            } catch (Exception exception) { showError(frame, exception); }
+        }
+
+        boolean save(DocumentFrame document, boolean saveAs) {
+            if (document == null) return false;
+            Path path = document.savedPath;
+            if (saveAs || path == null) {
+                chooser.setSelectedFile(path == null ? new java.io.File("saved-document.json") : path.toFile());
+                if (chooser.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) return false;
+                path = chooser.getSelectedFile().toPath();
+                if (Files.exists(path) && JOptionPane.showConfirmDialog(frame,
+                        "Replace " + path + "?", "Save Log", JOptionPane.YES_NO_OPTION)
+                        != JOptionPane.YES_OPTION) return false;
             }
-        });
-        JButton replay = new JButton("Replay current log");
-        replay.addActionListener(event -> {
             try {
-                new ReplayWindow(ReplayLog.parse(new ArrayList<>(filter.entries))).show();
-            } catch (Exception exception) {
-                showError(frame, exception);
+                for (LoggingFilter recording : recordings) {
+                    if (path.toAbsolutePath().normalize().equals(recording.automaticPath.toAbsolutePath().normalize())
+                            || (Files.exists(path) && Files.exists(recording.automaticPath)
+                            && Files.isSameFile(path, recording.automaticPath))) {
+                        throw new IOException("Choose a filename other than an active automatic log.");
+                    }
+                }
+                document.filter.save(path);
+                document.savedPath = path;
+                document.savedEntries = document.filter.entries.size();
+                document.updateTitle();
+                status.setText("Saved " + path.toAbsolutePath());
+                return true;
+            } catch (Exception exception) { showError(frame, exception); return false; }
+        }
+
+        boolean closeDocument(DocumentFrame document) {
+            if (document.filter.entries.size() != document.savedEntries) {
+                int answer = JOptionPane.showConfirmDialog(frame,
+                        "Save changes to " + document.getTitle() + "?", "Close Document",
+                        JOptionPane.YES_NO_CANCEL_OPTION);
+                if (answer == JOptionPane.CANCEL_OPTION || answer == JOptionPane.CLOSED_OPTION) return false;
+                if (answer == JOptionPane.YES_OPTION && !save(document, false)) return false;
             }
-        });
-        buttons.add(save);
-        buttons.add(open);
-        buttons.add(replay);
-        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.add(status, java.awt.BorderLayout.NORTH);
-        frame.add(scroll, java.awt.BorderLayout.CENTER);
-        frame.add(buttons, java.awt.BorderLayout.SOUTH);
-        frame.pack();
-        frame.setSize(Math.max(950, frame.getWidth()), frame.getHeight());
-        frame.setLocationRelativeTo(null);
-        frame.setVisible(true);
-        if (initialLog != null) {
-            ReplayState state = initialLog.states.get(initialLog.states.size() - 1);
-            SwingUtilities.invokeLater(() -> restoreScroll(text, filter, state));
+            try { document.filter.saveAutomatic(); }
+            catch (Exception exception) { showError(frame, exception); return false; }
+            documents.remove(document);
+            document.dispose();
+            updateActions();
+            return true;
+        }
+
+        void closeActive() {
+            JInternalFrame active = desktop.getSelectedFrame();
+            if (active instanceof DocumentFrame) closeDocument((DocumentFrame) active);
+            else if (active != null) active.dispose();
+        }
+
+        boolean closeAll() {
+            for (JInternalFrame child : desktop.getAllFrames()) {
+                if (child instanceof DocumentFrame) {
+                    if (!closeDocument((DocumentFrame) child)) return false;
+                } else child.dispose();
+            }
+            return true;
+        }
+
+        void exit() {
+            if (!closeAll()) return;
+            autosave.stop();
+            if (frame != null) frame.dispose();
+        }
+
+        void arrange(boolean tile) {
+            List<JInternalFrame> children = new ArrayList<>();
+            for (JInternalFrame child : desktop.getAllFrames()) if (!child.isIcon()) children.add(child);
+            int count = children.size();
+            int columns = Math.max(1, (int) Math.ceil(Math.sqrt(count)));
+            int rows = Math.max(1, (int) Math.ceil((double) count / columns));
+            for (int i = 0; i < count; i++) {
+                JInternalFrame child = children.get(i);
+                try { child.setMaximum(false); }
+                catch (java.beans.PropertyVetoException exception) { continue; }
+                if (tile) child.setBounds((i % columns) * desktop.getWidth() / columns,
+                        (i / columns) * desktop.getHeight() / rows,
+                        desktop.getWidth() / columns, desktop.getHeight() / rows);
+                else child.setBounds(i * 28, i * 28,
+                        Math.max(300, desktop.getWidth() - count * 28),
+                        Math.max(200, desktop.getHeight() - count * 28));
+            }
+        }
+
+        void rebuildWindowMenu() {
+            windowMenu.removeAll();
+            item(windowMenu, "Cascade", 0, false, () -> arrange(false));
+            item(windowMenu, "Tile", 0, false, () -> arrange(true));
+            item(windowMenu, "Close All", 0, false, this::closeAll);
+            windowMenu.addSeparator();
+            for (JInternalFrame child : desktop.getAllFrames()) {
+                item(windowMenu, child.getTitle(), 0, false, () -> activate(child));
+            }
+        }
+    }
+
+    static class DocumentFrame extends JInternalFrame {
+        final MdiApplication owner;
+        final LoggingFilter filter;
+        final JTextArea text;
+        final String untitled;
+        Path savedPath;
+        int savedEntries;
+
+        DocumentFrame(MdiApplication owner, LoggingFilter filter, String untitled) {
+            super(untitled, true, true, true, true);
+            this.owner = owner;
+            this.filter = filter;
+            this.untitled = untitled;
+            filter.onRecord = this::updateTitle;
+            text = createTextArea(filter);
+            add(createScrollPane(text, filter), java.awt.BorderLayout.CENTER);
+            setSize(720, 450);
+            setDefaultCloseOperation(JInternalFrame.DO_NOTHING_ON_CLOSE);
+            addInternalFrameListener(new InternalFrameAdapter() {
+                @Override
+                public void internalFrameClosing(InternalFrameEvent event) { owner.closeDocument(DocumentFrame.this); }
+            });
+        }
+
+        void updateTitle() {
+            String name = savedPath == null ? untitled : savedPath.getFileName().toString();
+            setTitle(name + (filter.entries.size() != savedEntries ? " *" : ""));
+        }
+        AbstractDocument document() { return (AbstractDocument) text.getDocument(); }
+        void insert() { edit(() -> document().insertString(text.getCaretPosition(), "Hello", null)); }
+        void replace() { edit(() -> document().replace(text.getSelectionStart(),
+                text.getSelectionEnd() - text.getSelectionStart(), "World", null)); }
+        void remove() {
+            edit(() -> {
+                int start = text.getSelectionStart(), length = text.getSelectionEnd() - start;
+                if (length == 0 && start < document().getLength()) length = 1;
+                document().remove(start, length);
+            });
         }
     }
 
@@ -323,20 +567,22 @@ public class DocumentFilterLogger {
         final List<String> entries = new ArrayList<>();
         final Map<String, Object> metadata = new LinkedHashMap<>();
         boolean dirty = true;
+        Path automaticPath = LOG_PATH;
+        Runnable onRecord = () -> { };
         boolean restoring;
         Instant lastTime = Instant.MIN;
 
         synchronized void save(Path path) throws IOException {
-            if (path.toAbsolutePath().normalize().equals(LOG_PATH.toAbsolutePath().normalize())
-                    || (Files.exists(path) && Files.exists(LOG_PATH) && Files.isSameFile(path, LOG_PATH))) {
-                throw new IOException("Choose a different filename from the active automatic log: " + LOG_PATH);
+            if (path.toAbsolutePath().normalize().equals(automaticPath.toAbsolutePath().normalize())
+                    || (Files.exists(path) && Files.exists(automaticPath) && Files.isSameFile(path, automaticPath))) {
+                throw new IOException("Choose a different filename from the active automatic log: " + automaticPath);
             }
             saveJson(path);
         }
 
         synchronized void saveAutomatic() throws IOException {
             if (!dirty || entries.isEmpty()) return;
-            saveJson(LOG_PATH);
+            saveJson(automaticPath);
             dirty = false;
         }
 
@@ -417,12 +663,13 @@ public class DocumentFilterLogger {
             audit(entry);
             entries.add(entry);
             dirty = true;
+            onRecord.run();
         }
 
         private void audit(String entry) {
             log.println(entry);
             if (log.checkError()) {
-                throw new IllegalStateException("Unable to write " + LOG_PATH);
+                throw new IllegalStateException("Unable to write " + automaticPath);
             }
             System.out.println(entry);
         }
@@ -689,7 +936,7 @@ public class DocumentFilterLogger {
             status.setToolTipText(state.time + " " + state.description);
         }
 
-        void show() {
+        JInternalFrame internalFrame(String title) {
             JButton forward = new JButton("Next edit");
             forward.addActionListener(event -> seek(log.nextEdit(position)));
             JButton backward = new JButton("Previous edit");
@@ -703,19 +950,18 @@ public class DocumentFilterLogger {
             controls.add(new JLabel("Speed ×"));
             controls.add(speed);
             controls.add(reset);
-            JFrame frame = new JFrame("Log replay");
-            frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-            frame.addWindowListener(new java.awt.event.WindowAdapter() {
+            JInternalFrame frame = new JInternalFrame("Replay — " + title, true, true, true, true);
+            frame.setDefaultCloseOperation(JInternalFrame.DISPOSE_ON_CLOSE);
+            frame.addInternalFrameListener(new InternalFrameAdapter() {
                 @Override
-                public void windowClosed(java.awt.event.WindowEvent event) { pause(); }
+                public void internalFrameClosed(InternalFrameEvent event) { pause(); }
             });
             frame.add(status, java.awt.BorderLayout.NORTH);
             frame.add(scroll, java.awt.BorderLayout.CENTER);
             frame.add(controls, java.awt.BorderLayout.SOUTH);
             render();
             frame.setSize(900, 400);
-            frame.setLocationRelativeTo(null);
-            frame.setVisible(true);
+            return frame;
         }
     }
 
@@ -785,7 +1031,80 @@ public class DocumentFilterLogger {
         testSaveAndContinue(lines.subList(0, 3), special);
         testScroll();
         testJson();
+        testMdi();
         System.out.println("Replay self-test passed");
+    }
+
+    static void testMdi() throws Exception {
+        Path directory = Files.createTempDirectory("mdi-document-test");
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                try {
+                    MdiApplication app = new MdiApplication();
+                    app.desktop.setSize(1000, 700);
+                    DocumentFrame first = app.addDocument(null, null);
+                    DocumentFrame second = app.addDocument(null, null);
+                    first.filter.automaticPath = directory.resolve("first-auto.json");
+                    second.filter.automaticPath = directory.resolve("second-auto.json");
+                    first.text.setText("First document");
+                    second.text.setText("Second document");
+                    app.activate(first);
+                    check(app.activeDocument() == first, "active document selection");
+                    first.insert();
+                    check(first.text.getText().endsWith("Hello")
+                            && second.text.getText().equals("Second document"), "document editing isolation");
+                    first.filter.saveAutomatic();
+                    second.filter.saveAutomatic();
+                    check(ReplayLog.load(first.filter.automaticPath, -1).states.get(
+                            first.filter.entries.size() - 1).text.equals(first.text.getText()),
+                            "first automatic log");
+                    check(ReplayLog.load(second.filter.automaticPath, -1).states.get(
+                            second.filter.entries.size() - 1).text.equals(second.text.getText()),
+                            "second automatic log");
+                    Path saved = directory.resolve("saved.json");
+                    first.filter.save(saved);
+                    DocumentFrame reopened = app.addDocument(ReplayLog.load(saved, -1), saved);
+                    reopened.filter.automaticPath = directory.resolve("reopened-auto.json");
+                    check(reopened.text.getText().equals(first.text.getText()) && app.documents.size() == 3,
+                            "open adds a document without replacing other documents");
+                    reopened.text.append(" continued");
+                    check(!first.text.getText().endsWith("continued"), "reopened log is independent");
+                    ReplayWindow replay = new ReplayWindow(ReplayLog.parse(first.filter.entries));
+                    JInternalFrame replayFrame = replay.internalFrame("First document");
+                    app.addInternalFrame(replayFrame);
+                    check(app.activeDocument() == null, "replay does not target an editor");
+                    check(app.documentActions.stream().noneMatch(Action::isEnabled),
+                            "editor menu actions disabled for replay");
+                    replay.timer.start();
+                    replayFrame.dispose();
+                    check(!replay.timer.isRunning(), "closing replay stops playback");
+                    app.arrange(true);
+                    check(first.getWidth() > 0 && first.getHeight() > 0, "tile layout");
+                    app.arrange(false);
+                    check(!first.getLocation().equals(second.getLocation()), "cascade layout");
+                    app.rebuildWindowMenu();
+                    check(app.windowMenu.getItemCount() == 7, "dynamic window list");
+                    app.activate(second);
+                    check(app.documentActions.stream().allMatch(Action::isEnabled),
+                            "editor menu actions enabled for document");
+                    for (DocumentFrame document : new ArrayList<>(app.documents)) {
+                        document.savedEntries = document.filter.entries.size();
+                        check(app.closeDocument(document), "close internal document");
+                    }
+                    check(app.desktop.getAllFrames().length == 0 && app.documents.isEmpty(),
+                            "all internal frames closed");
+                } catch (Exception exception) {
+                    throw new RuntimeException(exception);
+                }
+            });
+            // Flush deferred Swing restoration/activation notifications before cleanup.
+            SwingUtilities.invokeAndWait(() -> { });
+        } finally {
+            try (java.util.stream.Stream<Path> files = Files.list(directory)) {
+                for (Path path : (Iterable<Path>) files::iterator) Files.deleteIfExists(path);
+            }
+            Files.deleteIfExists(directory);
+        }
     }
 
     static void testJson() throws Exception {
@@ -939,7 +1258,7 @@ public class DocumentFilterLogger {
                     "id_comment", "id_code", "id_family_name", "id_project", "textLanguage",
                     "id_first_name", "id_gender")) metadata.putIfAbsent(key, "");
             metadata.putIfAbsent("osName", System.getProperty("os.name"));
-            metadata.putIfAbsent("Version", "DocumentFilterLogger-2");
+            metadata.putIfAbsent("Version", "ScriptLogLite-2");
             metadata.putIfAbsent("fontFamily", "Monospaced");
             metadata.putIfAbsent("fontSize", 12);
             metadata.putIfAbsent("lineSpacing", 1.0);

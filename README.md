@@ -1,13 +1,32 @@
-# DocumentFilter logger
+# ScriptLogLite
 
 A standalone Swing text area records document edits, caret movements, key
 presses/releases, and scrolling. Requires a JDK (Java 11 or newer):
 
 ```sh
-java DocumentFilterLogger.java
+java src/main/java/se/lu/scriptloglite/ScriptLogLite.java
 ```
 
-Type, paste, delete, or use the insertString/replace/remove buttons. The filter
+The main `JFrame` contains a `JDesktopPane`. Documents and replay viewers are
+resizable, closable, maximizable, and minimizable `JInternalFrame` windows added
+at runtime. New and Open Log each create a separate document, with independent
+text, selection, scroll position, and logging history.
+
+The menus provide:
+
+- **File**: New, Open Log, Save Log, Save Log As, Close, Exit.
+- **Edit**: Cut, Copy, Paste, Select All, and example insert/replace/remove commands.
+- **View**: Replay Current Log and Open Log for Replay.
+- **Window**: Cascade, Tile, Close All, and a list of open internal frames.
+- **Help**: About.
+
+Common commands have Ctrl keyboard shortcuts, including Ctrl+N, Ctrl+O, Ctrl+S,
+Ctrl+Shift+S, and Ctrl+W. Document commands operate on the selected document and
+are disabled when a replay viewer is selected. An asterisk marks unsaved log
+events. Closing a document or exiting offers Save / Discard / Cancel for changed
+histories. Replay timers stop when their internal frames close.
+
+Type, paste, delete, or use the Edit menu's insert/replace/remove commands. The filter
 allows edits through. Swing often calls `replace` for typing. Document operations
 that Swing ignores before reaching the filter do not produce filter events.
 The console provides diagnostic entries in text form.
@@ -62,29 +81,31 @@ the edit sequence, so saved JSON does not need `oldText` fields.
 
 ## Save, open, and continue
 
-**Save Log…** saves the complete current history. **Open Log…** restores text,
+**File → Save Log** saves the complete selected document history;
+**Save Log As…** chooses another filename. **Open Log…** restores text,
 caret, selection, and scroll position, then lets you continue editing. Saving
 again retains earlier events and adds new ones. No separate document file is
-needed. Opening asks before replacing the current session, and saving asks
-before replacing an existing file.
+needed. Opening adds a new internal frame and keeps existing documents open.
+Save As asks before replacing an existing file.
 
 ```sh
-java DocumentFilterLogger.java --open saved-document.json
-java DocumentFilterLogger.java --open exp_subj_json_1.json
+java src/main/java/se/lu/scriptloglite/ScriptLogLite.java --open saved-document.json
+java src/main/java/se/lu/scriptloglite/ScriptLogLite.java --open exp_subj_json_1.json
 ```
 
-Named saved files change only when you use Save Log. The separate automatic
-`document-filter.json` is refreshed every 500 ms and at normal shutdown. It holds
-the current complete session and is replaced on a new run or when you open
-another log. Save a named copy to keep a session. Saving over the active automatic
-file is blocked. File replacement uses a temporary file and an atomic move when
-the filesystem supports it.
+Named saved files change only when you use Save Log. Each document also has its
+own automatic JSON log, refreshed every 500 ms, when closing, and at normal
+shutdown. The first document uses `document-filter.json`; additional documents
+use `document-filter-<unique-id>.json`. The status bar shows the selected
+document's automatic filename. The first automatic file is replaced on a new
+run; save a named copy to keep it. Saving over automatic files is blocked. File
+replacement uses a temporary file and an atomic move when supported.
 
 Legacy text logs with session markers remain readable. Their latest session is
 selected by default, or specify its number (starting at 1):
 
 ```sh
-java DocumentFilterLogger.java --open older.log 1
+java src/main/java/se/lu/scriptloglite/ScriptLogLite.java --open older.log 1
 ```
 
 Saving a legacy log converts its selected session to JSON. Text logs from before
@@ -94,11 +115,12 @@ one session; its session number is always 1.
 ## Replay
 
 **Replay current log** replays the current history, including unsaved edits.
+Replay viewers open as internal frames alongside the documents.
 You can also open a saved log directly for replay:
 
 ```sh
-java DocumentFilterLogger.java --replay saved-document.json
-java DocumentFilterLogger.java --replay exp_subj_json_1.json
+java src/main/java/se/lu/scriptloglite/ScriptLogLite.java --replay saved-document.json
+java src/main/java/se/lu/scriptloglite/ScriptLogLite.java --replay exp_subj_json_1.json
 ```
 
 - **Play / Pause** follows recorded timestamp intervals and preserves remaining time.
@@ -120,13 +142,22 @@ positions, unknown event IDs, and backwards timestamps are rejected.
 ## Verification
 
 ```sh
-java DocumentFilterLogger.java --demo
-java -Djava.awt.headless=true DocumentFilterLogger.java --self-test
+java src/main/java/se/lu/scriptloglite/ScriptLogLite.java --demo
+java -Djava.awt.headless=true src/main/java/se/lu/scriptloglite/ScriptLogLite.java --self-test
 ```
 
 Checks cover editing, Unicode/escaping, forward/backward replay, timing/speeds,
 session selection, save/open/continue, scrolling, invalid JSON, and round trips
-of all 1,259 events in the supplied sample (when present).
+of all 1,259 events in the supplied sample (when present). MDI checks cover
+independent documents and automatic logs, opening additional documents, active
+menu commands, window layouts/listing, and closing replay timers.
 
-Alternatively compile with `javac DocumentFilterLogger.java`, then run
-`java DocumentFilterLogger` with the same arguments.
+The main class is `se.lu.scriptloglite.ScriptLogLite`. Alternatively compile and
+run it from the repository root:
+
+```sh
+javac -d out src/main/java/se/lu/scriptloglite/ScriptLogLite.java
+java -cp out se.lu.scriptloglite.ScriptLogLite
+```
+
+The compiled program accepts the same arguments.
