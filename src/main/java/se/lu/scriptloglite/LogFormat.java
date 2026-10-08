@@ -3,7 +3,7 @@ package se.lu.scriptloglite;
 import java.nio.file.Path;
 
 enum LogFormat {
-    JSON("JSON", ".json"), RAW("Raw", ".txt");
+    JSON("JSON", ".json"), RAW("Raw", ".txt"), IDFX("Inputlog IDFX", ".idfx");
     final String label, extension;
     LogFormat(String label, String extension) { this.label = label; this.extension = extension; }
     Path path(Path selected) {

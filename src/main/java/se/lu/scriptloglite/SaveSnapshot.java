@@ -14,11 +14,16 @@ final class SaveSnapshot {
     final List<LogEvent> events;
     final Map<String, Object> metadata;
     final long revision;
+    final boolean idfxExtensions;
     final java.util.Set<LogFormat> formats;
     SaveSnapshot(List<LogEvent> events, Map<String, Object> metadata, long revision) {
         this(events, metadata, revision, java.util.EnumSet.of(LogFormat.JSON));
     }
     SaveSnapshot(List<LogEvent> events, Map<String, Object> metadata, long revision, java.util.Set<LogFormat> formats) {
+        this(events, metadata, revision, formats, true);
+    }
+    SaveSnapshot(List<LogEvent> events, Map<String, Object> metadata, long revision, java.util.Set<LogFormat> formats, boolean idfxExtensions) {
+        this.idfxExtensions = idfxExtensions;
         if (formats.isEmpty()) throw new IllegalArgumentException("Select at least one save format");
         this.formats = java.util.Collections.unmodifiableSet(java.util.EnumSet.copyOf(formats));
         this.events = List.copyOf(events);
@@ -34,7 +39,8 @@ final class SaveSnapshot {
                 staged.put(target, temporary);
                 try (java.io.Writer writer = Files.newBufferedWriter(temporary, StandardCharsets.UTF_8)) {
                     if (format == LogFormat.JSON) JsonLogCodec.write(events, metadata, writer);
-                    else RawLogCodec.write(events, metadata, writer);
+                    else if (format == LogFormat.RAW) RawLogCodec.write(events, metadata, writer);
+                    else InputlogExporter.write(events, metadata, writer, idfxExtensions);
                     writer.write('\n');
                 }
             }

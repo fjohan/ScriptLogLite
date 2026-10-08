@@ -161,7 +161,7 @@ public final class ScriptLogLiteChecks {
             DirectoryHistory preferences = new DirectoryHistory(folder.resolve("preferences.properties"));
             check(preferences.formats().equals(java.util.EnumSet.of(LogFormat.JSON)), "JSON is default save format");
             preferences.rememberFormats(java.util.EnumSet.allOf(LogFormat.class));
-            check(new DirectoryHistory(preferences.file).formats().size() == 2, "save formats persist");
+            check(new DirectoryHistory(preferences.file).formats().size() == LogFormat.values().length, "save formats persist");
             SaveSnapshot both = new SaveSnapshot(log.events, log.metadata, 1, preferences.formats());
             Path jsonFile = folder.resolve("both.json");
             both.save(jsonFile);
@@ -174,6 +174,7 @@ public final class ScriptLogLiteChecks {
                 TabbedApplication app = new TabbedApplication(preferences);
                 check(app.formatChoices.values().stream().allMatch(javax.swing.JCheckBoxMenuItem::isSelected), "settings reflect persisted formats");
                 app.formatChoices.get(LogFormat.JSON).doClick();
+                app.formatChoices.get(LogFormat.IDFX).doClick();
                 app.formatChoices.get(LogFormat.RAW).doClick();
                 check(app.formatChoices.get(LogFormat.RAW).isSelected(), "cannot deselect final format");
             });

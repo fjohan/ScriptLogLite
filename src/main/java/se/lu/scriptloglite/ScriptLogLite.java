@@ -15,6 +15,19 @@ public final class ScriptLogLite {
         if (!java.awt.GraphicsEnvironment.isHeadless()) {
             installTheme(Theme.NIMBUS);
         }
+        if (args.length > 0 && args[0].equals("--export-idfx")) {
+            if (args.length != 3 && !(args.length == 4 && args[3].equals("--no-lite-labels"))) {
+                throw new IllegalArgumentException("Usage: --export-idfx INPUT_LOG OUTPUT_IDFX [--no-lite-labels]");
+            }
+            Path input = Path.of(args[1]);
+            Path output = LogFormat.IDFX.path(Path.of(args[2]));
+            if (input.toAbsolutePath().normalize().equals(output.toAbsolutePath().normalize())) {
+                throw new IllegalArgumentException("Choose an output separate from the input");
+            }
+            ReplayLog log = ReplayLog.load(input, -1);
+            new SaveSnapshot(log.events, log.metadata, 0, java.util.EnumSet.of(LogFormat.IDFX), args.length == 3).save(output);
+            return;
+        }
         if (!(args.length == 1 && args[0].equals("--self-test"))) workingDirectory();
         if (args.length > 0 && args[0].equals("--replay")) {
             if (args.length < 2 || args.length > 3) {

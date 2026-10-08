@@ -44,6 +44,10 @@ final class DirectoryHistory {
         properties.setProperty("saveFormats", formats.stream().map(Enum::name).collect(java.util.stream.Collectors.joining(",")));
         store();
     }
+    boolean idfxExtensions() { return Boolean.parseBoolean(properties.getProperty("idfxExtensions", "true")); }
+    void rememberIdfxExtensions(boolean enabled) {
+        properties.setProperty("idfxExtensions", Boolean.toString(enabled)); store();
+    }
     private void store() {
         try {
             Files.createDirectories(file.toAbsolutePath().getParent());

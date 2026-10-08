@@ -143,6 +143,13 @@ class TabbedApplication {
             });
         }
         settings.add(saveFormats);
+        javax.swing.JCheckBoxMenuItem idfxExtensions = new javax.swing.JCheckBoxMenuItem(
+                "Include ScriptLogLite labels in IDFX", directories.idfxExtensions());
+        settings.add(idfxExtensions);
+        idfxExtensions.addActionListener(event -> {
+            directories.rememberIdfxExtensions(idfxExtensions.isSelected());
+            for (RecordingSession session : recordings) session.setIdfxExtensions(idfxExtensions.isSelected());
+        });
         tabsMenu.setMnemonic(KeyEvent.VK_T);
         menus.add(tabsMenu);
         tabsMenu.addMenuListener(new javax.swing.event.MenuListener() {
@@ -259,7 +266,7 @@ class TabbedApplication {
         for (Action action : documentActions) action.setEnabled(activeDocument() != null);
         DocumentTab active = activeDocument();
         status.setText(active == null ? "Ready — File → New or Open Log"
-                : active.title + " — automatic log: " + (directories.formats().contains(LogFormat.JSON) ? LogFormat.JSON : LogFormat.RAW)
+                : active.title + " — automatic log: " + primaryFormat(directories.formats())
                         .path(active.filter.session.automaticPath).toAbsolutePath());
     }
 
@@ -269,6 +276,7 @@ class TabbedApplication {
         try { filter.session.automaticPath = allocateRecording(recordingVariables, java.time.LocalDate.now()); }
         catch (IOException exception) { throw new java.io.UncheckedIOException(exception); }
         filter.session.setFormats(directories.formats());
+        filter.session.setIdfxExtensions(directories.idfxExtensions());
         filter.startSession("");
         DocumentTab document = new DocumentTab(this, filter, "Untitled " + id);
         if (loaded != null) restoreLog(document.text, filter, loaded);
@@ -370,12 +378,17 @@ class TabbedApplication {
         JOptionPane.showMessageDialog(frame, new JScrollPane(details), "Inputlog import report", JOptionPane.INFORMATION_MESSAGE);
     }
 
+    private static LogFormat primaryFormat(java.util.Set<LogFormat> formats) {
+        for (LogFormat format : LogFormat.values()) if (formats.contains(format)) return format;
+        throw new IllegalArgumentException("Select a save format");
+    }
+
     boolean save(DocumentTab document, boolean saveAs) { return save(document, saveAs, () -> { }); }
 
     boolean save(DocumentTab document, boolean saveAs, Runnable afterSave) {
         if (document == null || document.saving) return false;
         java.util.Set<LogFormat> selectedFormats = directories.formats();
-        LogFormat primary = selectedFormats.contains(LogFormat.JSON) ? LogFormat.JSON : LogFormat.RAW;
+        LogFormat primary = primaryFormat(selectedFormats);
         Path path = document.savedPath == null ? null : primary.path(document.savedPath);
         if (saveAs || path == null) {
             Path directory = directories.directory("save");
@@ -403,6 +416,7 @@ class TabbedApplication {
             }
             final Path target = path;
             document.filter.session.setFormats(selectedFormats);
+            document.filter.session.setIdfxExtensions(directories.idfxExtensions());
             SaveSnapshot snapshot = document.filter.session.snapshot();
             document.saving = true;
             status.setText("Saving " + target.toAbsolutePath() + "…");

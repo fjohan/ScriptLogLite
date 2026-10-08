@@ -34,7 +34,7 @@ The menus provide:
 - **Edit**: Cut, Copy, Paste, Select All, and example insert/replace/remove commands.
 - **View**: Replay Current Log, Open Log for Replay, and Nimbus/Light/Dark themes.
 - **Tabs**: Next Tab, Previous Tab, Close All, and a list of open tabs.
-- **Settings**: JSON/Raw save formats.
+- **Settings**: JSON/Raw/Inputlog IDFX save formats.
 - **Help**: About.
 
 Common commands have Ctrl keyboard shortcuts, including Ctrl+N, Ctrl+O, Ctrl+S,
@@ -334,7 +334,7 @@ java -jar target/scriptloglite-1.0-SNAPSHOT.jar
 ```
 
 Keep `target/lib` alongside the JAR: its manifest references FlatLaf there.
-The application JAR accepts `--open`, `--replay`, and `--demo`; the regression
+The application JAR accepts `--open`, `--replay`, `--export-idfx`, and `--demo`; the regression
 suite is separate and runs with `mvn test` or `./run.sh --self-test`.
 
 Checks cover editing, Unicode/escaping, forward/backward replay, timing/speeds,
@@ -389,7 +389,71 @@ This is an initial text-only importer, tested against the supplied file and
 small synthetic histories. It does not reconstruct Word formatting, tables,
 images, or documents with unlogged initial text. Unknown event types, inconsistent
 document lengths, and ambiguous paste candidates fail with an event-specific
-error instead of silently producing an unreliable document. IDFX is read-only;
-exports are ScriptLogLite JSON/raw, with `JF_92.json`/`JF_92.txt` as save targets.
+error instead of silently producing an unreliable document. Imported IDFX sessions can be saved as ScriptLogLite JSON/raw or exported to
+IDFX, with `JF_92.json`/`JF_92.txt`/`JF_92.idfx` as the corresponding filenames.
 The local C# reference reader is in `InputlogHTML/Core/IO/XML/Input`; relevant
 Word capture and revision code is in `Core/Plugin/WordLog` and `Core/Analyses/Revision`.
+
+
+## Inputlog IDFX export
+
+Enable **Settings → Save formats → Inputlog IDFX** to include `.idfx` in manual
+and automatic background saves. JSON remains the default. Select IDFX alone to
+save only that format, or combine it with JSON/raw. A direct conversion command
+reads either JSON or raw without starting the GUI:
+
+```sh
+./run.sh --export-idfx exp_subj_json_1.json exp_subj_export_1.idfx
+./run.sh --export-idfx exp_subj_raw_1.txt /tmp/from-raw.idfx
+```
+
+The supplied `exp_subj_export_1.idfx` was converted from the JSON sample. Its
+native fields contain 321 keyboard events (262 replayable typing/backspace
+operations), 20 Word replacements, selections, document focus anchors, and
+approximate statistics. Press/release pairs become one Inputlog keyboard event;
+missing release times are zero. Straightforward single-character typing and
+backspace consume their matching document edit, preventing double insertion.
+Other edits use explicit Word replacement ranges, including paste and deletion.
+LF newlines become Word CR paragraph marks. Initial content is reconstructed by
+a synthetic insertion. Word document lengths include the mandatory final mark.
+
+`__ScriptLogLiteExporter` identifies the producing application; the native
+program-version field identifies the compatibility schema. The synthetic
+relative clock starts at 1 millisecond. The export report identifies inferred
+key characters/modifiers, approximate statistics, unknown wall-clock dates and
+missing Word layout/document information. This creates an IDFX text history,
+not a corresponding `.docx` file.
+
+Original header data is stored in `__ScriptLogLiteHeader`. One structured
+`ScriptLogLite` label per event retains nanosecond timing, caret direction and
+viewport offsets. These use Inputlog's existing metadata/label mechanisms.
+Scroll changes are represented by labelled, unchanged selections, since viewport
+pixels cannot establish actual mouse coordinates or wheel deltas. Inputlog
+itself sees ordinary selection events; ScriptLogLite restores the viewport when
+reading these extensions. Key/release timing has millisecond resolution in
+native fields. Word-only edit times require the labels for precise replay.
+
+Tests reconstruct the sample from both the labelled file and a copy with **all
+ScriptLogLite extensions removed**, check paired keys, escaping, initial text,
+and backwards replay. Final text is preserved in both cases. This environment
+cannot run the Windows/Word-based Inputlog application, so opening the supplied
+export there is the next interoperability check. IDFX conversion preserves the
+text history but does not promise identical Word analysis results or a lossless
+round trip of every ScriptLogLite event field.
+
+
+For IDFX files intended primarily for Inputlog analysis, uncheck
+**Settings → Include ScriptLogLite labels in IDFX**. The preference persists and
+applies to both manual and automatic background saves, including open documents.
+Labels remain enabled by default. Disabling them omits all ScriptLogLite event
+labels, header/provenance extensions, and viewport-only selection placeholders.
+Standard Inputlog edits, keys, selections and statistics remain. JSON/raw saves
+retain their normal information. Without the extensions, IDFX reimports have
+native millisecond/preceding-event timing and cannot restore font/geometry,
+selection direction or viewport offsets.
+
+The command-line equivalent is:
+
+```sh
+./run.sh --export-idfx exp_subj_json_1.json output.idfx --no-lite-labels
+```

@@ -29,6 +29,7 @@ final class InputlogImporter {
     private final List<Object> ancillary = new ArrayList<>();
     private final StringBuilder text = new StringBuilder();
     private final Instant epoch;
+    private final Map<String, Object> exportedHeader;
     private final long clock;
     private Instant causalTime;
     private long lastClock;
@@ -38,7 +39,9 @@ final class InputlogImporter {
 
     private InputlogImporter(Element root) {
         Map<String, Object> meta = entries(child(root, "meta"));
-        epoch = Instant.ofEpochMilli(Long.parseLong(required(meta, "__LogCreationTimeStamp")));
+        exportedHeader = exportedHeader(meta);
+        epoch = exportedHeader.containsKey("recordingStartTime") ? Instant.parse(exportedHeader.get("recordingStartTime").toString())
+                : Instant.ofEpochMilli(Long.parseLong(required(meta, "__LogCreationTimeStamp")));
         clock = Long.parseLong(required(meta, "__LogRelativeCreationDate"));
         lastClock = clock;
         causalTime = epoch;
@@ -77,9 +80,19 @@ final class InputlogImporter {
                 if (end > 0) lastClock = Math.max(lastClock, end);
                 // Word-only events have no timestamp; anchor them to the preceding operation.
                 if (start > 0 && time(start).isAfter(causalTime)) causalTime = time(start);
+                String precise = label(event, InputlogExporter.TIME);
+                if (!exportedHeader.isEmpty() && precise != null) causalTime = epoch.plusNanos(Long.parseLong(precise));
                 switch (type) {
                     case "keyboard": keyboard(event, win, start, end); break;
-                    case "selection": selection(part(event, "wordlog")); break;
+                    case "selection":
+                        if (!exportedHeader.isEmpty() && label(event, "ScriptLogLite.viewX") != null) {
+                            events.add(new ScrollLogEvent(causalTime, Integer.parseInt(label(event, "ScriptLogLite.viewX")),
+                                    Integer.parseInt(label(event, "ScriptLogLite.viewY"))));
+                        } else if (!exportedHeader.isEmpty() && label(event, "ScriptLogLite.dot") != null) {
+                            caret(coordinate(Integer.parseInt(label(event, "ScriptLogLite.dot"))),
+                                    coordinate(Integer.parseInt(label(event, "ScriptLogLite.mark"))));
+                        } else selection(part(event, "wordlog"));
+                        break;
                     case "replacement": replacement(event, i); break;
                     case "insert": insertion(event, i); break;
                     case "mouse": case "focus": case "statistics": ancillary.add(sourceEvent(event)); break;
@@ -95,14 +108,17 @@ final class InputlogImporter {
         events.sort(Comparator.comparing(event -> event.time));
         ReplayLog log = new ReplayLog(events);
         warnings.add("Word paragraph marks are represented by LF; the mandatory final Word paragraph mark is omitted.");
-        warnings.add("Untimed Word edits/selections use the preceding event time; selection direction is unavailable.");
+        if (exportedHeader.isEmpty()) warnings.add("Untimed Word edits/selections use the preceding event time; selection direction is unavailable.");
+        else warnings.add("ScriptLogLite header, precise event times, selection direction and viewport were restored from labelled extensions.");
         warnings.add("Mouse/focus/statistics are retained as source metadata, not replayed; screen coordinates cannot establish document scrolling.");
-        warnings.add("This file supplies no font, line spacing or editor geometry; replay uses ScriptLogLite defaults.");
+        if (exportedHeader.isEmpty()) warnings.add("This file supplies no font, line spacing or editor geometry; replay uses ScriptLogLite defaults.");
         if (missingReleases > 0) warnings.add(missingReleases + " keyboard events have no usable release time; no release was invented.");
         Map<String, Object> report = new LinkedHashMap<>();
         report.put("sourceEventCounts", counts);
         report.put("inferredEdits", inferred);
         report.put("warnings", warnings);
+        log.metadata.putAll(exportedHeader);
+        log.metadata.remove("recordingStartTime");
         log.metadata.put("sourceFormat", "Inputlog IDFX");
         log.metadata.put("inputlogMeta", entries(child(root, "meta")));
         Map<String, Object> session = entries(child(root, "session"));
@@ -111,8 +127,8 @@ final class InputlogImporter {
         log.metadata.put("inputlogImportReport", report);
         log.metadata.put("id_code", session.getOrDefault("Participant", ""));
         log.metadata.put("textLanguage", session.getOrDefault("Text Language", ""));
-        log.metadata.put("startTime", 0L);
-        log.metadata.put("endTime", Math.multiplyExact(lastClock - clock, 1_000_000L));
+        log.metadata.putIfAbsent("startTime", 0L);
+        log.metadata.putIfAbsent("endTime", Math.multiplyExact(lastClock - clock, 1_000_000L));
         // No recordingStartTime: restoreLog rebases foreign logs when continuing a session.
         return log;
     }
@@ -135,9 +151,11 @@ final class InputlogImporter {
                 : key.startsWith("VK_R") && isModifier(key) ? KeyEvent.KEY_LOCATION_RIGHT : KeyEvent.KEY_LOCATION_STANDARD;
         int code = keyCode(key);
         // Keep the Windows VK name even when Swing has no matching key code.
-        events.add(new KeyLogEvent(time(start), EventType.KEY_PRESSED, code, key, value,
+        events.add(new KeyLogEvent(exportedHeader.isEmpty() ? time(start) : causalTime, EventType.KEY_PRESSED, code, key, value,
                 modifiers, InputEvent.getModifiersExText(modifiers), location));
-        if (end >= start) events.add(new KeyLogEvent(time(end), EventType.KEY_RELEASED, code, key, value,
+        Instant releaseTime = !exportedHeader.isEmpty() && label(event, "ScriptLogLite.releaseElapsedNanos") != null
+                ? epoch.plusNanos(Long.parseLong(label(event, "ScriptLogLite.releaseElapsedNanos"))) : time(Math.max(start, end));
+        if (end >= start) events.add(new KeyLogEvent(releaseTime, EventType.KEY_RELEASED, code, key, value,
                 modifiers, InputEvent.getModifiersExText(modifiers), location));
         else missingReleases++;
         if (dot != position && mark != position) caret(position, position);
@@ -146,6 +164,9 @@ final class InputlogImporter {
             throw new IllegalArgumentException("missing/invalid replay flag");
         }
         if (Boolean.parseBoolean(replay)) {
+            if (!exportedHeader.isEmpty() && label(event, "ScriptLogLite.editElapsedNanos") != null) {
+                causalTime = epoch.plusNanos(Long.parseLong(label(event, "ScriptLogLite.editElapsedNanos")));
+            }
             if (key.equals("VK_BACK")) {
                 if (position == 0) throw new IllegalArgumentException("backspace at document start");
                 edit(position - 1, position, ""); caret(position - 1, position - 1);
@@ -333,6 +354,25 @@ final class InputlogImporter {
         Map<String, Object> result = new LinkedHashMap<>();
         for (Element entry : children(element, "entry")) result.put(field(entry, "key"), field(entry, "value"));
         return result;
+    }
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> exportedHeader(Map<String, Object> meta) {
+        if (!meta.containsKey("__ScriptLogLiteExporter") || !meta.containsKey(InputlogExporter.HEADER)) return Map.of();
+        Object parsed = new Json(meta.get(InputlogExporter.HEADER).toString()).parse();
+        if (!(parsed instanceof Map)) throw new IllegalArgumentException("Invalid ScriptLogLite IDFX header extension");
+        return (Map<String, Object>) parsed;
+    }
+    private static String label(Element event, String key) {
+        for (Element item : children(event, "label")) {
+            if (item.getAttribute("key").equals(key)) return item.getTextContent();
+            if (item.getAttribute("key").equals("ScriptLogLite")) {
+                Object fields = new Json(item.getTextContent()).parse();
+                if (!(fields instanceof Map)) throw new IllegalArgumentException("Invalid ScriptLogLite event label");
+                Object value = ((Map<?, ?>) fields).get(key);
+                if (value != null) return value.toString();
+            }
+        }
+        return null;
     }
     private static Map<String, Object> sourceEvent(Element event) {
         Map<String, Object> result = new LinkedHashMap<>();

@@ -19,6 +19,10 @@ final class RecordingSession {
         if (values.isEmpty()) throw new IllegalArgumentException("Select at least one save format");
         formats = java.util.EnumSet.copyOf(values); changed();
     }
+    private boolean idfxExtensions = true;
+    synchronized void setIdfxExtensions(boolean enabled) {
+        if (idfxExtensions != enabled) { idfxExtensions = enabled; changed(); }
+    }
     private long revision;
     long automaticRevision = -1;
     Path automaticPath;
@@ -56,7 +60,7 @@ final class RecordingSession {
         result.metadata.putAll(metadata);
         return result;
     }
-    synchronized SaveSnapshot snapshot() { return new SaveSnapshot(entries, metadata, revision, formats); }
+    synchronized SaveSnapshot snapshot() { return new SaveSnapshot(entries, metadata, revision, formats, idfxExtensions); }
     void save(Path path) throws IOException {
         if (automaticPath != null) {
             for (LogFormat format : formats) {
