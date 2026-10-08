@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<actions>
+  <action>
+    <actionName>run</actionName>
+    <goals>
+      <goal>process-classes</goal>
+      <goal>exec:exec</goal>
+    </goals>
+    <properties>
+      <exec.executable>java</exec.executable>
+      <exec.args>${exec.vmArgs} -classpath %classpath ${exec.mainClass} ${exec.appArgs}</exec.args>
+      <exec.vmArgs></exec.vmArgs>
+      <exec.mainClass>se.lu.scriptloglite.ScriptLogLite</exec.mainClass>
+      <exec.appArgs></exec.appArgs>
+      <exec.classpathScope>runtime</exec.classpathScope>
+      <exec.workingdir>${project.basedir}</exec.workingdir>
+    </properties>
+  </action>
+  <action>
+    <actionName>debug</actionName>
+    <goals>
+      <goal>process-classes</goal>
+      <goal>exec:exec</goal>
+    </goals>
+    <properties>
+      <exec.executable>java</exec.executable>
+      <exec.args>${exec.vmArgs} -classpath %classpath ${exec.mainClass} ${exec.appArgs}</exec.args>
+      <exec.vmArgs>-agentlib:jdwp=transport=dt_socket,server=n,address=${jpda.address}</exec.vmArgs>
+      <exec.mainClass>se.lu.scriptloglite.ScriptLogLite</exec.mainClass>
+      <exec.appArgs></exec.appArgs>
+      <exec.classpathScope>runtime</exec.classpathScope>
+      <exec.workingdir>${project.basedir}</exec.workingdir>
+      <jpda.listen>true</jpda.listen>
+    </properties>
+  </action>
+</actions>

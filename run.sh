@@ -21,7 +21,18 @@ if [[ "${1:-}" == "--with-flatlaf" ]]; then
     fi
 fi
 
-if [[ -s "$flatlaf_jar" ]]; then
-    exec java --class-path "$flatlaf_jar" src/main/java/se/lu/scriptloglite/ScriptLogLite.java "$@"
+scriptloglite_main=se.lu.scriptloglite.ScriptLogLite
+scriptloglite_vm_args=()
+if [[ "${1:-}" == "--self-test" ]]; then
+    shift
+    java tools/CompileSources.java --tests
+    scriptloglite_main=se.lu.scriptloglite.ScriptLogLiteChecks
+    scriptloglite_vm_args=(-Djava.awt.headless=true)
+else
+    java tools/CompileSources.java
 fi
-exec java src/main/java/se/lu/scriptloglite/ScriptLogLite.java "$@"
+scriptloglite_classpath=target/launcher-classes
+if [[ -s "$flatlaf_jar" ]]; then
+    scriptloglite_classpath="$scriptloglite_classpath:$flatlaf_jar"
+fi
+exec java "${scriptloglite_vm_args[@]}" --class-path "$scriptloglite_classpath" "$scriptloglite_main" "$@"

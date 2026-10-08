@@ -235,46 +235,85 @@ the complete compatible JSON file in the background. This keeps serialization
 and disk I/O off Swing's UI thread, but does not make disk work incremental;
 very large histories still take longer to save.
 
-## Verification
+## Code organization
+
+The project stays in one Maven module and the package `se.lu.scriptloglite`.
+Classes are separated under `src/main/java/se/lu/scriptloglite`:
+
+| Area | Classes |
+| --- | --- |
+| Startup | `ScriptLogLite` |
+| Workspace and editors | `TabbedApplication`, `DocumentTab`, `EditorSupport`, `ThemeManager` |
+| Recording model | `RecordingSession`, `LogEvent`, `EventType`, and the event subclasses |
+| Swing event capture | `LoggingFilter` |
+| Replay | `ReplayLog`, `ReplayCursor`, `ReplayState`, `ReplayPanel` |
+| JSON and saving | `JsonLogCodec`, `Json`, `SaveSnapshot`, `BackgroundSaver` |
+| Directories and identifiers | `RecordingPaths`, `RecordingVariables`, `DirectoryHistory` |
+
+`RecordingSession` owns event history, metadata, revisions, and snapshots.
+History and metadata are private, with immutable copies provided to readers.
+`LoggingFilter` captures Swing events and forwards them to that session.
+`ReplayCaret` and `SpacedTextArea` remain implementation details nested inside
+`ReplayPanel`. Regression checks are in `src/test/java`, outside the application
+artifact.
+
+## NetBeans
+
+NetBeans [recognizes existing Maven projects](https://netbeans.apache.org/wiki/main/wiki/MavenBestPractices/).
+Use **File → Open Project** and select this repository's root directory containing
+`pom.xml`. No separate Ant project or GUI-builder `.form` files are needed.
+
+- Choose a JDK 11 or newer as the project's Java platform.
+- **Run Project** starts `se.lu.scriptloglite.ScriptLogLite`.
+- **Debug Project** starts the same application with the NetBeans debugger attached.
+- **Test Project** runs the JUnit regression suite through Maven.
+- **Clean and Build** produces the application JAR and its runtime libraries.
+
+`nbactions.xml` supplies the Run/Debug mappings, and the POM declares the main
+class, Java release, dependencies, and test configuration. Source Packages and
+Test Packages appear separately. To run with `--open`, `--replay`, or `--demo`,
+set the application arguments in **Project Properties → Run** (or the matching
+Run/Debug action's `exec.appArgs` property). The working directory is the project
+root; recordings still go to the user's `ScriptLogLiteWD` directory.
+
+Maven resolves FlatLaf and JUnit from Maven Central on the first build. Nimbus
+remains the default. FlatLaf is available in the theme menu when Maven supplies
+its runtime dependency.
+
+## Build and verification
+
+The shell launcher now compiles all application sources before running:
 
 ```sh
+./run.sh
+./run.sh --open saved-document.json
 ./run.sh --demo
-java -Djava.awt.headless=true src/main/java/se/lu/scriptloglite/ScriptLogLite.java --self-test
+./run.sh --self-test
 ```
 
-Checks cover editing, Unicode/escaping, forward/backward replay, timing/speeds,
-session selection, save/open/continue, scrolling, invalid JSON, and round trips
-of all 1,259 events in the supplied sample (when present). Tabbed-workspace checks cover
-independent documents and automatic logs, opening additional documents, active
-menu commands, tab navigation/listing, and closing replay timers. Additional checks
-cover 2,048 reversible edits with sparse checkpoints, saving while editing,
-automatic-save coalescing, background completion callbacks, and failed-save
-recovery. The sample's JSON event objects are compared field-for-field after
-export.
+It uses the JDK compiler API, so it does not require Maven. `--self-test` also
+compiles the standalone test harness and runs it headlessly. For optional FlatLaf
+checks, use `./run.sh --with-flatlaf --self-test`.
 
-The main class is `se.lu.scriptloglite.ScriptLogLite`. You can also build with
-Maven (requires a JDK with `javac` and Maven installed):
+For Maven/NetBeans builds:
 
 ```sh
+mvn test
 mvn package
 java -jar target/scriptloglite-1.0-SNAPSHOT.jar
 ```
 
 Keep `target/lib` alongside the JAR: its manifest references FlatLaf there.
-The JAR accepts the same `--open`, `--replay`, `--demo`, and `--self-test` arguments.
-For example, run all checks including real FlatLaf theme switches with:
+The application JAR accepts `--open`, `--replay`, and `--demo`; the regression
+suite is separate and runs with `mvn test` or `./run.sh --self-test`.
 
-```sh
-java -Djava.awt.headless=true -jar target/scriptloglite-1.0-SNAPSHOT.jar --self-test
-```
+Checks cover editing, Unicode/escaping, forward/backward replay, timing/speeds,
+save/open/continue, scrolling, invalid JSON, and field-for-field round trips of
+all 1,259 events in the supplied sample (when present). They also cover independent
+tabs and automatic logs, replay controls and geometry, directory persistence,
+recording numbering and collisions, 2,048 reversible edits with sparse
+checkpoints, background-save coalescing, and failed-save recovery.
 
-Without Maven, you can download `flatlaf-3.7.jar` into `.deps` manually and use:
-
-```sh
-java --class-path .deps/flatlaf-3.7.jar src/main/java/se/lu/scriptloglite/ScriptLogLite.java
-```
-
-The dependency-free headless source command above still checks logging and
-replay; Nimbus theme checks run without extra dependencies; optional FlatLaf checks are skipped when absent. To include
-those checks without Maven, use `./run.sh --with-flatlaf --self-test` (with
-`JAVA_TOOL_OPTIONS=-Djava.awt.headless=true` if no display is available).
+Maven compiles against the Java 11 API using `--release 11`. The shell compiler
+helper does the same on a complete JDK. If a stripped runtime lacks `ct.sym`, it
+reports that only Java 11 syntax and class-file compatibility can be checked.
