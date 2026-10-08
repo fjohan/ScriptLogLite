@@ -32,6 +32,7 @@ public final class CompileSources {
         }
         if (args.length == 1 && args[0].equals("--tests")) {
             options.add("src/test/java/se/lu/scriptloglite/ScriptLogLiteChecks.java");
+            options.add("src/test/java/se/lu/scriptloglite/InputlogChecks.java");
         }
         int result = compiler.run(null, System.out, System.err, options.toArray(new String[0]));
         if (result != 0) System.exit(result);

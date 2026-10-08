@@ -65,11 +65,18 @@ final class EditorSupport {
 
     static void restoreLog(JTextArea text, LoggingFilter filter, ReplayLog loaded) {
         if (!loaded.metadata.isEmpty() && !loaded.metadata.containsKey("recordingStartTime")) {
-            // Imported experiment clocks have no wall-clock epoch. Keep their intervals,
-            // but attach the last event to now so continuation does not add decades of idle time.
+            // Rebase foreign clocks for continuation. IDFX retains its trailing idle
+            // interval; existing JSON/raw imports retain their last-event anchor.
             Instant originalStart = loaded.states.get(0).time;
             Instant originalEnd = loaded.states.get(loaded.states.size() - 1).time;
-            Instant newStart = Instant.now().minus(Duration.between(originalStart, originalEnd));
+            Duration duration = Duration.between(originalStart, originalEnd);
+            if ("Inputlog IDFX".equals(loaded.metadata.get("sourceFormat"))
+                    && loaded.metadata.containsKey("endTime") && loaded.metadata.containsKey("startTime")) {
+                Duration recorded = Duration.ofNanos(Math.subtractExact(JsonLogCodec.number(loaded.metadata, "endTime"),
+                        JsonLogCodec.number(loaded.metadata, "startTime")));
+                if (recorded.compareTo(duration) > 0) duration = recorded;
+            }
+            Instant newStart = Instant.now().minus(duration);
             List<LogEvent> rebased = new ArrayList<>();
             for (LogEvent event : loaded.events) {
                 rebased.add(event.at(newStart.plus(Duration.between(originalStart, event.time))));

@@ -118,6 +118,13 @@ class ReplayLog {
     static String decode(String value) { return value.startsWith("\"") ? (String) new Json(value).parse() : value.equals("null") ? null : value; }
     static ReplayLog load(Path path, int session) throws Exception {
         String content = Files.readString(path, StandardCharsets.UTF_8);
+        if (content.startsWith("\uFEFF")) content = content.substring(1);
+        if (content.stripLeading().startsWith("<")) {
+            if (session != -1 && session != 1) throw new IllegalArgumentException("IDFX holds one session");
+            ReplayLog imported = InputlogImporter.load(content);
+            imported.metadata.put("inputlogSourceFile", path.getFileName().toString());
+            return imported;
+        }
         if (content.stripLeading().startsWith("[")) {
             if (session != -1 && session != 1) throw new IllegalArgumentException("JSON holds one session");
             return JsonLogCodec.load(content);

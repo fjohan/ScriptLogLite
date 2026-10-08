@@ -10,6 +10,7 @@ enum LogFormat {
         String name = selected.getFileName().toString();
         if (name.toLowerCase(java.util.Locale.ROOT).endsWith(".json")) name = name.substring(0, name.length() - 5);
         else if (name.toLowerCase(java.util.Locale.ROOT).endsWith(".txt")) name = name.substring(0, name.length() - 4);
+        else if (name.toLowerCase(java.util.Locale.ROOT).endsWith(".idfx")) name = name.substring(0, name.length() - 5);
         return selected.resolveSibling(name + extension);
     }
 }

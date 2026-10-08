@@ -28,6 +28,7 @@ import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
 import static se.lu.scriptloglite.EditorSupport.applyScroll;
 import static se.lu.scriptloglite.EditorSupport.restoreScroll;
@@ -72,6 +73,8 @@ class TabbedApplication {
         toolbar.setFloatable(false);
         toolbar.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
         status.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
+        openChooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
+                "Logs (JSON, raw, Inputlog IDFX)", "json", "txt", "log", "idfx"));
         openChooser.setCurrentDirectory(directories.directory("open").toFile());
         saveChooser.setCurrentDirectory(directories.directory("save").toFile());
         JMenu file = menu("File", KeyEvent.VK_F);
@@ -346,7 +349,25 @@ class TabbedApplication {
             directories.remember("open", path);
             if (replay) addReplay(loaded, path.getFileName().toString());
             else addDocument(loaded, path);
+            showImportReport(loaded);
         } catch (Exception exception) { showError(frame, exception); }
+    }
+
+    private void showImportReport(ReplayLog log) {
+        Object value = log.metadata.get("inputlogImportReport");
+        if (!(value instanceof Map)) return;
+        Map<?, ?> report = (Map<?, ?>) value;
+        StringBuilder message = new StringBuilder("Imported Inputlog IDFX.\n\n");
+        for (String section : java.util.List.of("inferredEdits", "warnings")) {
+            Object items = report.get(section);
+            if (items instanceof java.util.List) for (Object item : (java.util.List<?>) items) {
+                message.append("• ").append(item).append("\n\n");
+            }
+        }
+        JTextArea details = new JTextArea(message.toString(), 16, 65);
+        details.setEditable(false); details.setLineWrap(true); details.setWrapStyleWord(true);
+        details.setCaretPosition(0);
+        JOptionPane.showMessageDialog(frame, new JScrollPane(details), "Inputlog import report", JOptionPane.INFORMATION_MESSAGE);
     }
 
     boolean save(DocumentTab document, boolean saveAs) { return save(document, saveAs, () -> { }); }

@@ -347,3 +347,49 @@ checkpoints, background-save coalescing, and failed-save recovery.
 Maven compiles against the Java 11 API using `--release 11`. The shell compiler
 helper does the same on a complete JDK. If a stripped runtime lacks `ct.sym`, it
 reports that only Java 11 syntax and class-file compatibility can be checked.
+
+## Inputlog IDFX import
+
+**File → Open Log** also reads Inputlog `.idfx` files. It reconstructs their text
+and event history in a recording tab, where you can continue writing, replay,
+and save using the selected JSON/raw formats. **View → Open Log for Replay**
+opens the same imported history directly in a replay tab. Command-line examples:
+
+```sh
+./run.sh --open JF_92.idfx
+./run.sh --replay JF_92.idfx
+```
+
+The importer uses Inputlog's Word positions and document lengths, its keyboard
+`replay` flag, selections, replacements, and before/after insertion candidates.
+Press and release times become ScriptLogLite keyboard events; overlapping
+releases are ordered by time. Each imported edit stores the text it removes,
+so backward stepping works without Word or an external document. Word paragraph
+marks become LF newlines, excluding Word's mandatory final paragraph mark.
+
+`JF_92.idfx` reconstructs 209 UTF-16 characters, with `KJELL HÖGLUND` moved from
+the bottom to the top. Excluding newlines, its 200 characters (171 excluding
+spaces too) agree with the final Word statistics. This is its own writing
+session; its events are not mapped to the `exp_subj` samples. Its cut event
+requires an inferred selected-range deletion, checked against Ctrl+X and the
+following document length. Its paste candidate is resolved using the preceding
+caret and resulting position. These decisions are listed in the import report.
+
+An import report is shown when opening IDFX through the file dialog. It is also
+saved under `inputlogImportReport` in JSON/raw headers, alongside the original
+Inputlog metadata, session fields, source filename, and mouse/focus/statistics
+records. Screen coordinates do not establish editor scroll positions, so those
+source events are not replayed as scrolling. The file provides no font, line
+spacing or editor geometry; ScriptLogLite uses its defaults. Untimed Word events
+are anchored to the preceding operation, selection direction is approximated,
+and zero/missing release times do not generate invented releases. Session timing
+includes trailing idle time; continuation starts after that interval.
+
+This is an initial text-only importer, tested against the supplied file and
+small synthetic histories. It does not reconstruct Word formatting, tables,
+images, or documents with unlogged initial text. Unknown event types, inconsistent
+document lengths, and ambiguous paste candidates fail with an event-specific
+error instead of silently producing an unreliable document. IDFX is read-only;
+exports are ScriptLogLite JSON/raw, with `JF_92.json`/`JF_92.txt` as save targets.
+The local C# reference reader is in `InputlogHTML/Core/IO/XML/Input`; relevant
+Word capture and revision code is in `Core/Plugin/WordLog` and `Core/Analyses/Revision`.
