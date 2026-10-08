@@ -37,7 +37,7 @@ final class RecordingPaths {
     static Path nextLogFile(Path directory, String prefix) {
         int index = 1;
         Path file = directory.resolve(prefix + "_sll_" + index + ".json");
-        while (Files.exists(file)) {
+        while (Files.exists(file) || Files.exists(LogFormat.RAW.path(file))) {
             index = Math.addExact(index, 1);
             file = directory.resolve(prefix + "_sll_" + index + ".json");
         }

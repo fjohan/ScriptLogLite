@@ -122,6 +122,10 @@ class ReplayLog {
             if (session != -1 && session != 1) throw new IllegalArgumentException("JSON holds one session");
             return JsonLogCodec.load(content);
         }
+        if (java.util.Arrays.stream(content.split("\\R")).anyMatch(line -> line.equals("#"))) {
+            if (session != -1 && session != 1) throw new IllegalArgumentException("Raw holds one session");
+            return RawLogCodec.load(content);
+        }
         List<List<String>> sessions = new ArrayList<>();
         for (String line : content.split("\\R")) {
             if (line.isBlank()) continue;

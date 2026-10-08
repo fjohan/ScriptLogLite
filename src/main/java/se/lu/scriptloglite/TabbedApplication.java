@@ -50,6 +50,7 @@ class TabbedApplication {
     final JFileChooser openChooser = new JFileChooser();
     final JFileChooser saveChooser = new JFileChooser();
     final DirectoryHistory directories;
+    final Map<LogFormat, javax.swing.JCheckBoxMenuItem> formatChoices = new java.util.EnumMap<>(LogFormat.class);
     final RecordingVariables recordingVariables = new RecordingVariables("expr", "_", "subj");
     final Map<Theme, javax.swing.JRadioButtonMenuItem> themeChoices = new java.util.EnumMap<>(Theme.class);
     Theme theme = Theme.NIMBUS;
@@ -122,6 +123,23 @@ class TabbedApplication {
             });
         }
         view.add(appearance);
+        JMenu settings = menu("Settings", KeyEvent.VK_S);
+        JMenu saveFormats = new JMenu("Save formats");
+        for (LogFormat format : LogFormat.values()) {
+            javax.swing.JCheckBoxMenuItem choice = new javax.swing.JCheckBoxMenuItem(format.label,
+                    directories.formats().contains(format));
+            formatChoices.put(format, choice);
+            saveFormats.add(choice);
+            choice.addActionListener(event -> {
+                java.util.Set<LogFormat> selected = java.util.EnumSet.noneOf(LogFormat.class);
+                for (LogFormat candidate : LogFormat.values()) if (formatChoices.get(candidate).isSelected()) selected.add(candidate);
+                if (selected.isEmpty()) { choice.setSelected(true); return; }
+                directories.rememberFormats(selected);
+                for (RecordingSession session : recordings) session.setFormats(selected);
+                updateActions();
+            });
+        }
+        settings.add(saveFormats);
         tabsMenu.setMnemonic(KeyEvent.VK_T);
         menus.add(tabsMenu);
         tabsMenu.addMenuListener(new javax.swing.event.MenuListener() {
@@ -238,7 +256,8 @@ class TabbedApplication {
         for (Action action : documentActions) action.setEnabled(activeDocument() != null);
         DocumentTab active = activeDocument();
         status.setText(active == null ? "Ready — File → New or Open Log"
-                : active.title + " — automatic log: " + active.filter.session.automaticPath.toAbsolutePath());
+                : active.title + " — automatic log: " + (directories.formats().contains(LogFormat.JSON) ? LogFormat.JSON : LogFormat.RAW)
+                        .path(active.filter.session.automaticPath).toAbsolutePath());
     }
 
     DocumentTab addDocument(ReplayLog loaded, Path path) {
@@ -246,6 +265,7 @@ class TabbedApplication {
         LoggingFilter filter = new LoggingFilter();
         try { filter.session.automaticPath = allocateRecording(recordingVariables, java.time.LocalDate.now()); }
         catch (IOException exception) { throw new java.io.UncheckedIOException(exception); }
+        filter.session.setFormats(directories.formats());
         filter.startSession("");
         DocumentTab document = new DocumentTab(this, filter, "Untitled " + id);
         if (loaded != null) restoreLog(document.text, filter, loaded);
@@ -333,27 +353,35 @@ class TabbedApplication {
 
     boolean save(DocumentTab document, boolean saveAs, Runnable afterSave) {
         if (document == null || document.saving) return false;
-        Path path = document.savedPath;
+        java.util.Set<LogFormat> selectedFormats = directories.formats();
+        LogFormat primary = selectedFormats.contains(LogFormat.JSON) ? LogFormat.JSON : LogFormat.RAW;
+        Path path = document.savedPath == null ? null : primary.path(document.savedPath);
         if (saveAs || path == null) {
             Path directory = directories.directory("save");
             saveChooser.setCurrentDirectory(directory.toFile());
-            saveChooser.setSelectedFile(directory.resolve(path == null ? document.filter.session.automaticPath.getFileName().toString()
-                    : path.getFileName().toString()).toFile());
+            saveChooser.setSelectedFile(primary.path(directory.resolve(path == null
+                    ? document.filter.session.automaticPath.getFileName().toString() : path.getFileName().toString())).toFile());
             if (saveChooser.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) return false;
-            path = saveChooser.getSelectedFile().toPath();
-            if (Files.exists(path) && JOptionPane.showConfirmDialog(frame,
-                    "Replace " + path + "?", "Save Log", JOptionPane.YES_NO_OPTION)
-                    != JOptionPane.YES_OPTION) return false;
+            path = primary.path(saveChooser.getSelectedFile().toPath());
+            for (LogFormat format : selectedFormats) {
+                Path output = format.path(path);
+                if (Files.exists(output) && JOptionPane.showConfirmDialog(frame,
+                        "Replace " + output + "?", "Save Log", JOptionPane.YES_NO_OPTION)
+                        != JOptionPane.YES_OPTION) return false;
+            }
         }
         try {
             for (RecordingSession recording : recordings) {
-                if (path.toAbsolutePath().normalize().equals(recording.automaticPath.toAbsolutePath().normalize())
-                        || (Files.exists(path) && Files.exists(recording.automaticPath)
-                        && Files.isSameFile(path, recording.automaticPath))) {
-                    throw new IOException("Choose a filename other than an active automatic log.");
+                for (LogFormat format : selectedFormats) {
+                    Path output = format.path(path), automatic = format.path(recording.automaticPath);
+                    if (output.toAbsolutePath().normalize().equals(automatic.toAbsolutePath().normalize())
+                            || (Files.exists(output) && Files.exists(automatic) && Files.isSameFile(output, automatic))) {
+                        throw new IOException("Choose a filename other than an active automatic log.");
+                    }
                 }
             }
             final Path target = path;
+            document.filter.session.setFormats(selectedFormats);
             SaveSnapshot snapshot = document.filter.session.snapshot();
             document.saving = true;
             status.setText("Saving " + target.toAbsolutePath() + "…");

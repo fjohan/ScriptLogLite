@@ -30,6 +30,21 @@ final class DirectoryHistory {
     }
     void remember(String operation, Path selectedFile) {
         properties.setProperty(operation, selectedFile.toAbsolutePath().normalize().getParent().toString());
+        store();
+    }
+    java.util.Set<LogFormat> formats() {
+        java.util.Set<LogFormat> result = java.util.EnumSet.noneOf(LogFormat.class);
+        for (String name : properties.getProperty("saveFormats", "JSON").split(",")) {
+            try { result.add(LogFormat.valueOf(name)); } catch (IllegalArgumentException ignored) { }
+        }
+        return result.isEmpty() ? java.util.EnumSet.of(LogFormat.JSON) : result;
+    }
+    void rememberFormats(java.util.Set<LogFormat> formats) {
+        if (formats.isEmpty()) throw new IllegalArgumentException("Select at least one save format");
+        properties.setProperty("saveFormats", formats.stream().map(Enum::name).collect(java.util.stream.Collectors.joining(",")));
+        store();
+    }
+    private void store() {
         try {
             Files.createDirectories(file.toAbsolutePath().getParent());
             try (java.io.Writer writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {

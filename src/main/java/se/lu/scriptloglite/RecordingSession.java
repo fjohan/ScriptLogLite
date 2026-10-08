@@ -14,6 +14,11 @@ final class RecordingSession {
     private final List<LogEvent> entries = new ArrayList<>();
     private final Map<String, Object> metadata = new LinkedHashMap<>();
     boolean dirty = true;
+    private java.util.Set<LogFormat> formats = java.util.EnumSet.of(LogFormat.JSON);
+    synchronized void setFormats(java.util.Set<LogFormat> values) {
+        if (values.isEmpty()) throw new IllegalArgumentException("Select at least one save format");
+        formats = java.util.EnumSet.copyOf(values); changed();
+    }
     private long revision;
     long automaticRevision = -1;
     Path automaticPath;
@@ -51,11 +56,16 @@ final class RecordingSession {
         result.metadata.putAll(metadata);
         return result;
     }
-    synchronized SaveSnapshot snapshot() { return new SaveSnapshot(entries, metadata, revision); }
+    synchronized SaveSnapshot snapshot() { return new SaveSnapshot(entries, metadata, revision, formats); }
     void save(Path path) throws IOException {
-        if (automaticPath != null && (path.toAbsolutePath().normalize().equals(automaticPath.toAbsolutePath().normalize())
-                || (Files.exists(path) && Files.exists(automaticPath) && Files.isSameFile(path, automaticPath)))) {
-            throw new IOException("Choose another filename than the active automatic log");
+        if (automaticPath != null) {
+            for (LogFormat format : formats) {
+                Path output = format.path(path), automatic = format.path(automaticPath);
+                if (output.toAbsolutePath().normalize().equals(automatic.toAbsolutePath().normalize())
+                        || (Files.exists(output) && Files.exists(automatic) && Files.isSameFile(output, automatic))) {
+                    throw new IOException("Choose another filename than the active automatic log");
+                }
+            }
         }
         snapshot().save(path);
     }

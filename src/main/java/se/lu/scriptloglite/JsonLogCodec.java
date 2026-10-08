@@ -19,6 +19,45 @@ class JsonLogCodec {
 
     /** Stream one JSON event at a time; no whole-output string or event-map list. */
     static void write(List<LogEvent> events, Map<String, Object> originalMetadata, java.io.Writer writer) throws IOException {
+        Map<String, Object> metadata = header(events, originalMetadata);
+        SessionEvent initial = (SessionEvent) events.get(0);
+        long start = number(metadata, "startTime");
+        writer.write("[\n  [\n    ");
+        writer.write(Json.stringify(metadata, 2));
+        writer.write("\n  ],\n  [");
+        for (int i = 1; i < events.size(); i++) {
+            LogEvent item = events.get(i);
+            long elapsed = Duration.between(initial.time, item.time).toNanos();
+            Map<String, Object> event = new LinkedHashMap<>();
+            event.put("when", Math.addExact(start, elapsed));
+            event.put("relativeTime", String.format(java.util.Locale.ROOT, "%.3f", elapsed / 1e9));
+            event.put("event", "<" + item.type.name + ">"); event.put("eventID", item.type.id);
+            if (item instanceof EditEvent) {
+                EditEvent edit = (EditEvent) item;
+                event.put("offset", edit.offset); event.put("length", edit.removed.length());
+                if (edit.type != EventType.REMOVE) event.put("str", edit.inserted);
+            } else if (item instanceof CaretLogEvent) {
+                CaretLogEvent caret = (CaretLogEvent) item;
+                event.put("dot", caret.dot); event.put("mark", caret.mark);
+            } else if (item instanceof ScrollLogEvent) {
+                ScrollLogEvent scroll = (ScrollLogEvent) item;
+                event.put("viewX", scroll.x); event.put("viewY", scroll.y);
+            } else if (item instanceof KeyLogEvent) {
+                KeyLogEvent key = (KeyLogEvent) item;
+                event.put("keyCode", key.keyCode);
+                if (key.keyText != null) event.put("keyText", key.keyText);
+                if (key.keyChar != null) event.put("keyChar", key.keyChar);
+                if (key.modifiers != null) event.put("modifiers", key.modifiers);
+                if (key.modifiersText != null) event.put("modifiersText", key.modifiersText);
+                if (key.keyLocation != null) event.put("keyLocation", key.keyLocation);
+            }
+            writer.write(i == 1 ? "\n    " : ",\n    ");
+            writer.write(Json.stringify(event, 2));
+        }
+        writer.write(events.size() == 1 ? "]\n]" : "\n  ]\n]");
+    }
+
+    static Map<String, Object> header(List<LogEvent> events, Map<String, Object> originalMetadata) {
         if (events.isEmpty() || !(events.get(0) instanceof SessionEvent)) throw new IllegalArgumentException("Missing session");
         SessionEvent initial = (SessionEvent) events.get(0);
         LogEvent last = events.get(events.size() - 1);
@@ -56,39 +95,7 @@ class JsonLogCodec {
         metadata.put("initialText", initial.initialText);
         metadata.put("recordingStartTime", initial.time.toString());
         metadata.put("tokensInFinalText", text.length());
-        writer.write("[\n  [\n    ");
-        writer.write(Json.stringify(metadata, 2));
-        writer.write("\n  ],\n  [");
-        for (int i = 1; i < events.size(); i++) {
-            LogEvent item = events.get(i);
-            long elapsed = Duration.between(initial.time, item.time).toNanos();
-            Map<String, Object> event = new LinkedHashMap<>();
-            event.put("when", Math.addExact(start, elapsed));
-            event.put("relativeTime", String.format(java.util.Locale.ROOT, "%.3f", elapsed / 1e9));
-            event.put("event", "<" + item.type.name + ">"); event.put("eventID", item.type.id);
-            if (item instanceof EditEvent) {
-                EditEvent edit = (EditEvent) item;
-                event.put("offset", edit.offset); event.put("length", edit.removed.length());
-                if (edit.type != EventType.REMOVE) event.put("str", edit.inserted);
-            } else if (item instanceof CaretLogEvent) {
-                CaretLogEvent caret = (CaretLogEvent) item;
-                event.put("dot", caret.dot); event.put("mark", caret.mark);
-            } else if (item instanceof ScrollLogEvent) {
-                ScrollLogEvent scroll = (ScrollLogEvent) item;
-                event.put("viewX", scroll.x); event.put("viewY", scroll.y);
-            } else if (item instanceof KeyLogEvent) {
-                KeyLogEvent key = (KeyLogEvent) item;
-                event.put("keyCode", key.keyCode);
-                if (key.keyText != null) event.put("keyText", key.keyText);
-                if (key.keyChar != null) event.put("keyChar", key.keyChar);
-                if (key.modifiers != null) event.put("modifiers", key.modifiers);
-                if (key.modifiersText != null) event.put("modifiersText", key.modifiersText);
-                if (key.keyLocation != null) event.put("keyLocation", key.keyLocation);
-            }
-            writer.write(i == 1 ? "\n    " : ",\n    ");
-            writer.write(Json.stringify(event, 2));
-        }
-        writer.write(events.size() == 1 ? "]\n]" : "\n  ]\n]");
+        return metadata;
     }
 
     @SuppressWarnings("unchecked")

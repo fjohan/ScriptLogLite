@@ -115,8 +115,74 @@ public final class ScriptLogLiteChecks {
         testDirectoryHistory();
         testRecordingPaths();
         testReplayControls();
+        testRawFormat();
         testThemes();
         System.out.println("Replay self-test passed");
+    }
+
+    static void testRawFormat() throws Exception {
+        Path sample = Path.of("exp_subj_raw_1.txt");
+        if (Files.exists(sample)) {
+            ReplayLog raw = ReplayLog.load(sample, -1);
+            ReplayLog json = ReplayLog.load(Path.of("exp_subj_json_1.json"), -1);
+            checkHistory(json, raw, "raw sample matches JSON sample");
+            check(raw.metadata.equals(json.metadata), "raw and JSON sample headers match");
+            String exported = RawLogCodec.export(raw);
+            List<String> originalLines = Files.readAllLines(sample);
+            List<String> exportedLines = java.util.Arrays.asList(exported.split("\\R"));
+            check(originalLines.subList(originalLines.indexOf("#") + 1, originalLines.size())
+                    .equals(exportedLines.subList(exportedLines.indexOf("#") + 1, exportedLines.size())),
+                    "all sample raw event lines preserved exactly");
+        }
+        String payload = " A\n\r\t\b\f\u0000\\s\\n😀= #";
+        check(RawLogCodec.decode(RawLogCodec.encode(payload)).equals(payload), "raw escaped payload round trip");
+        Instant start = Instant.EPOCH;
+        ReplayLog log = new ReplayLog(List.of(new SessionEvent(start, ""),
+                new EditEvent(start.plusNanos(1), EventType.INSERT, 0, "", payload),
+                new CaretLogEvent(start.plusNanos(2), payload.length(), 0),
+                new KeyLogEvent(start.plusNanos(3), EventType.KEY_PRESSED, 65, "A", "\n", 2, "Ctrl Shift", 1),
+                new EditEvent(start.plusNanos(4), EventType.REPLACE, 0, "", null),
+                new EditEvent(start.plusNanos(5), EventType.REPLACE, 0, payload, "")));
+        log.metadata.put("fontFamily", "Family With Spaces");
+        log.metadata.put("extra", Map.of("note", "spaces and\nnewlines", "values", List.of(1, 2)));
+        String rawText = RawLogCodec.export(log);
+        ReplayLog restored = RawLogCodec.load(rawText);
+        checkHistory(log, restored, "raw reversible edits round trip");
+        check(JsonLogCodec.export(log.events, log.metadata).equals(JsonLogCodec.export(restored.events, restored.metadata)),
+                "raw preserves null/empty text, header, and keyboard details");
+        for (String invalid : List.of("startTime: 0\n", "startTime: 0\n#\n1 0.000 <replace> 0 0 \\q\n",
+                "startTime: 0\n#\n1 0.000 <remove> 0 1\n")) {
+            try { RawLogCodec.load(invalid); throw new AssertionError("Invalid raw accepted"); }
+            catch (IllegalArgumentException expected) { }
+        }
+        Path folder = Files.createTempDirectory("raw-settings-test");
+        try {
+            DirectoryHistory preferences = new DirectoryHistory(folder.resolve("preferences.properties"));
+            check(preferences.formats().equals(java.util.EnumSet.of(LogFormat.JSON)), "JSON is default save format");
+            preferences.rememberFormats(java.util.EnumSet.allOf(LogFormat.class));
+            check(new DirectoryHistory(preferences.file).formats().size() == 2, "save formats persist");
+            SaveSnapshot both = new SaveSnapshot(log.events, log.metadata, 1, preferences.formats());
+            Path jsonFile = folder.resolve("both.json");
+            both.save(jsonFile);
+            checkHistory(ReplayLog.load(jsonFile, -1), ReplayLog.load(folder.resolve("both.txt"), -1), "save both formats");
+            SaveSnapshot rawOnly = new SaveSnapshot(log.events, log.metadata, 2, java.util.EnumSet.of(LogFormat.RAW));
+            rawOnly.save(folder.resolve("raw-only.json"));
+            check(Files.exists(folder.resolve("raw-only.txt")) && !Files.exists(folder.resolve("raw-only.json")),
+                    "raw-only save writes no JSON");
+            SwingUtilities.invokeAndWait(() -> {
+                TabbedApplication app = new TabbedApplication(preferences);
+                check(app.formatChoices.values().stream().allMatch(javax.swing.JCheckBoxMenuItem::isSelected), "settings reflect persisted formats");
+                app.formatChoices.get(LogFormat.JSON).doClick();
+                app.formatChoices.get(LogFormat.RAW).doClick();
+                check(app.formatChoices.get(LogFormat.RAW).isSelected(), "cannot deselect final format");
+            });
+        } finally {
+            try (java.util.stream.Stream<Path> files = Files.list(folder)) {
+                for (Path file : (Iterable<Path>) files::iterator) Files.deleteIfExists(file);
+            }
+            Files.delete(folder);
+        }
+        System.out.println("Raw format and save-format settings checks passed");
     }
 
     static void testRecordingPaths() throws Exception {
@@ -365,7 +431,7 @@ public final class ScriptLogLiteChecks {
         SwingUtilities.invokeAndWait(() -> {
             javax.swing.LookAndFeel original = javax.swing.UIManager.getLookAndFeel();
             try {
-                TabbedApplication app = new TabbedApplication();
+                TabbedApplication app = new TabbedApplication(new DirectoryHistory(workingDirectory().resolve("test-preferences.properties")));
                 DocumentTab document = app.addDocument(null, null);
                 document.text.setText("Theme switching preserves the document");
                 document.text.setCaretPosition(2);
@@ -405,7 +471,7 @@ public final class ScriptLogLiteChecks {
         try {
             SwingUtilities.invokeAndWait(() -> {
                 try {
-                    TabbedApplication app = new TabbedApplication();
+                    TabbedApplication app = new TabbedApplication(new DirectoryHistory(workingDirectory().resolve("test-preferences.properties")));
                     background[0] = app.saver;
                     app.tabs.setSize(1000, 700);
                     DocumentTab first = app.addDocument(null, null);
@@ -558,7 +624,7 @@ public final class ScriptLogLiteChecks {
 
     static void testSaveAndContinue(List<String> original, String special) throws Exception {
         Path directory = Files.createTempDirectory("document-log-roundtrip");
-        Path saved = directory.resolve("saved.log");
+        Path saved = directory.resolve("saved.json");
         try {
             SwingUtilities.invokeAndWait(() -> {
                 try {

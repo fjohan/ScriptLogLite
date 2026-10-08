@@ -34,6 +34,7 @@ The menus provide:
 - **Edit**: Cut, Copy, Paste, Select All, and example insert/replace/remove commands.
 - **View**: Replay Current Log, Open Log for Replay, and Nimbus/Light/Dark themes.
 - **Tabs**: Next Tab, Previous Tab, Close All, and a list of open tabs.
+- **Settings**: JSON/Raw save formats.
 - **Help**: About.
 
 Common commands have Ctrl keyboard shortcuts, including Ctrl+N, Ctrl+O, Ctrl+S,
@@ -53,6 +54,35 @@ Open and Save dialogs remember separate directories across runs. Successful
 opens and saves update their respective directory, stored in
 `~/.config/scriptloglite/directories.properties`. Missing directories fall back
 to `~/ScriptLogLiteWD`.
+
+## Raw logs and save formats
+
+Open Log and Open Log for Replay recognize both JSON and compact raw logs by
+content, including `exp_subj_raw_1.txt`. Raw logs contain `key: value` header lines,
+a line containing only `#`, and one event per line:
+
+```text
+startTime: 1000000000
+#
+1100000000 0.100 <replace> 0 0 Hello\sworld
+```
+
+The reader reconstructs text and reversible edits just as it does for JSON.
+Spaces/newlines use the sample's `\s` / `\n` escapes. New raw exports also support
+`\r`, `\t`, `\uXXXX`, `\e` (empty string), and `\N` (null), so pasted text and
+literal backslashes round-trip safely. String header values are quoted using
+JSON escaping. Optional named fields after keyboard events preserve modifiers,
+characters, and key locations when present.
+
+**Settings → Save formats** offers independent **JSON** and **Raw** checkboxes.
+JSON alone is the default. Select either format or both; at least one must remain
+selected. The choice is remembered across runs and applies to named saves and
+automatic logs, including already open documents. Both uses matching basenames:
+`expr_subj_sll_1.json` and `expr_subj_sll_1.txt`. Each output is written in the
+background using the same captured history. Existing outputs are retained when
+a format is later disabled. Save As normalizes extensions and asks before
+replacing any selected output. File replacement is atomic per output when
+supported, rather than a transaction spanning both files.
 
 ## JSON log format
 
@@ -247,7 +277,7 @@ Classes are separated under `src/main/java/se/lu/scriptloglite`:
 | Recording model | `RecordingSession`, `LogEvent`, `EventType`, and the event subclasses |
 | Swing event capture | `LoggingFilter` |
 | Replay | `ReplayLog`, `ReplayCursor`, `ReplayState`, `ReplayPanel` |
-| JSON and saving | `JsonLogCodec`, `Json`, `SaveSnapshot`, `BackgroundSaver` |
+| JSON and saving | `JsonLogCodec`, `RawLogCodec`, `LogFormat`, `Json`, `SaveSnapshot`, `BackgroundSaver` |
 | Directories and identifiers | `RecordingPaths`, `RecordingVariables`, `DirectoryHistory` |
 
 `RecordingSession` owns event history, metadata, revisions, and snapshots.
@@ -309,7 +339,7 @@ suite is separate and runs with `mvn test` or `./run.sh --self-test`.
 
 Checks cover editing, Unicode/escaping, forward/backward replay, timing/speeds,
 save/open/continue, scrolling, invalid JSON, and field-for-field round trips of
-all 1,259 events in the supplied sample (when present). They also cover independent
+all 1,259 events in the supplied samples (when present), including exact raw event-line round trips. They also cover independent
 tabs and automatic logs, replay controls and geometry, directory persistence,
 recording numbering and collisions, 2,048 reversible edits with sparse
 checkpoints, background-save coalescing, and failed-save recovery.
