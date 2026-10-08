@@ -48,12 +48,59 @@ import javax.swing.text.DocumentFilter;
 
 /** Logs DocumentFilter editing methods and text-area caret and key events. */
 public class ScriptLogLite {
-    private static final Path LOG_PATH = Path.of("document-filter.json");
+    private static Path workingRoot = Path.of(System.getProperty("user.home"), "ScriptLogLiteWD");
+
+    static Path workingDirectory() {
+        try { return Files.createDirectories(workingRoot).toAbsolutePath(); }
+        catch (IOException exception) { throw new java.io.UncheckedIOException("Cannot create working directory " + workingRoot, exception); }
+    }
+
+    static final class RecordingVariables {
+        final String experiment, condition, subject;
+        RecordingVariables(String experiment, String condition, String subject) {
+            for (String value : List.of(experiment, condition, subject)) {
+                if (!value.matches("[A-Za-z0-9_.-]+")) throw new IllegalArgumentException("Invalid recording identifier");
+            }
+            this.experiment = experiment; this.condition = condition; this.subject = subject;
+            if (prefix().equals(".") || prefix().equals("..")) throw new IllegalArgumentException("Invalid recording directory");
+        }
+        String prefix() { return experiment + condition + subject; }
+    }
+
+    static Path allocateRecording(RecordingVariables variables, java.time.LocalDate date) throws IOException {
+        Path group = Files.createDirectories(workingDirectory().resolve(variables.prefix()));
+        int index = 1;
+        Pattern numbered = Pattern.compile("\\d{4}-\\d{2}-\\d{2}_(\\d+)");
+        try (java.util.stream.Stream<Path> children = Files.list(group)) {
+            for (Path child : (Iterable<Path>) children::iterator) {
+                Matcher matcher = numbered.matcher(child.getFileName().toString());
+                if (matcher.matches()) index = Math.max(index, Math.addExact(Integer.parseInt(matcher.group(1)), 1));
+            }
+        }
+        while (true) {
+            Path directory = group.resolve(date + "_" + index);
+            try {
+                Files.createDirectory(directory); // Reserve atomically, including across application processes.
+                return nextLogFile(directory, variables.prefix());
+            } catch (java.nio.file.FileAlreadyExistsException exception) { index = Math.addExact(index, 1); }
+        }
+    }
+
+    static Path nextLogFile(Path directory, String prefix) {
+        int index = 1;
+        Path file = directory.resolve(prefix + "_sll_" + index + ".json");
+        while (Files.exists(file)) {
+            index = Math.addExact(index, 1);
+            file = directory.resolve(prefix + "_sll_" + index + ".json");
+        }
+        return file;
+    }
 
     public static void main(String[] args) throws Exception {
         if (!java.awt.GraphicsEnvironment.isHeadless()) {
             installTheme(Theme.NIMBUS);
         }
+        if (!(args.length == 1 && args[0].equals("--self-test"))) workingDirectory();
         if (args.length > 0 && args[0].equals("--replay")) {
             if (args.length < 2 || args.length > 3) {
                 throw new IllegalArgumentException("Usage: --replay LOG_FILE [SESSION_NUMBER]");
@@ -82,6 +129,7 @@ public class ScriptLogLite {
         final ReplayLog initialLog = opened;
         if (args.length == 1 && args[0].equals("--demo")) {
             LoggingFilter filter = new LoggingFilter();
+            filter.automaticPath = allocateRecording(new RecordingVariables("expr", "_", "subj"), java.time.LocalDate.now());
             filter.startSession("");
             SwingUtilities.invokeAndWait(() -> edit(() -> {
                 JTextArea text = createTextArea(filter);
@@ -121,6 +169,38 @@ public class ScriptLogLite {
         }
     }
 
+    static final class DirectoryHistory {
+        final Path file;
+        final java.util.Properties properties = new java.util.Properties();
+        DirectoryHistory(Path file) {
+            this.file = file;
+            if (Files.isRegularFile(file)) {
+                try (java.io.Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+                    properties.load(reader);
+                } catch (IOException exception) { System.err.println("Cannot read directory preferences: " + exception.getMessage()); }
+            }
+        }
+        Path directory(String operation) {
+            String saved = properties.getProperty(operation);
+            if (saved != null) {
+                try {
+                    Path path = Path.of(saved);
+                    if (Files.isDirectory(path)) return path;
+                } catch (java.nio.file.InvalidPathException ignored) { }
+            }
+            return workingDirectory();
+        }
+        void remember(String operation, Path selectedFile) {
+            properties.setProperty(operation, selectedFile.toAbsolutePath().normalize().getParent().toString());
+            try {
+                Files.createDirectories(file.toAbsolutePath().getParent());
+                try (java.io.Writer writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
+                    properties.store(writer, "ScriptLogLite last open/save directories");
+                }
+            } catch (IOException exception) { System.err.println("Cannot save directory preferences: " + exception.getMessage()); }
+        }
+    }
+
     /** One application window with independent document and replay tabs. */
     static class TabbedApplication {
         final JTabbedPane tabs = new JTabbedPane();
@@ -132,7 +212,10 @@ public class ScriptLogLite {
         final List<DocumentTab> documents = new java.util.concurrent.CopyOnWriteArrayList<>();
         final List<LoggingFilter> recordings = new java.util.concurrent.CopyOnWriteArrayList<>();
         final List<Action> documentActions = new ArrayList<>();
-        final JFileChooser chooser = new JFileChooser();
+        final JFileChooser openChooser = new JFileChooser();
+        final JFileChooser saveChooser = new JFileChooser();
+        final DirectoryHistory directories;
+        final RecordingVariables recordingVariables = new RecordingVariables("expr", "_", "subj");
         final Map<Theme, javax.swing.JRadioButtonMenuItem> themeChoices = new java.util.EnumMap<>(Theme.class);
         Theme theme = Theme.NIMBUS;
         final Timer autosave;
@@ -142,13 +225,19 @@ public class ScriptLogLite {
         int sequence;
 
         TabbedApplication() {
+            this(new DirectoryHistory(Path.of(System.getProperty("user.home"), ".config", "scriptloglite", "directories.properties")));
+        }
+
+        TabbedApplication(DirectoryHistory directories) {
+            this.directories = directories;
             tabs.setPreferredSize(new Dimension(1100, 700));
             tabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
             tabs.addChangeListener(event -> updateActions());
             toolbar.setFloatable(false);
             toolbar.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
             status.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
-            chooser.setSelectedFile(new java.io.File("saved-document.json"));
+            openChooser.setCurrentDirectory(directories.directory("open").toFile());
+            saveChooser.setCurrentDirectory(directories.directory("save").toFile());
             JMenu file = menu("File", KeyEvent.VK_F);
             toolbar.add(item(file, "New", KeyEvent.VK_N, false, () -> addDocument(null, null)));
             toolbar.add(item(file, "Open Log…", KeyEvent.VK_O, false, () -> open(false)));
@@ -176,7 +265,7 @@ public class ScriptLogLite {
             toolbar.add(item(view, "Replay Current Log", KeyEvent.VK_R, true, () -> {
                 DocumentTab document = activeDocument();
                 try {
-                    addReplay(ReplayLog.parse(new ArrayList<>(document.filter.entries)), document.title);
+                    addReplay(document.filter.replay(), document.title);
                 } catch (Exception exception) { showError(frame, exception); }
             }));
             item(view, "Open Log for Replay…", 0, false, () -> open(true));
@@ -251,7 +340,8 @@ public class ScriptLogLite {
                     SwingUtilities.updateComponentTreeUI(menus);
                     SwingUtilities.updateComponentTreeUI(toolbar);
                 }
-                SwingUtilities.updateComponentTreeUI(chooser);
+                SwingUtilities.updateComponentTreeUI(openChooser);
+                SwingUtilities.updateComponentTreeUI(saveChooser);
                 for (Map.Entry<DocumentTab, Point> entry : positions.entrySet()) {
                     Point selection = selections.get(entry.getKey());
                     entry.getKey().text.setCaretPosition(selection.y);
@@ -271,7 +361,8 @@ public class ScriptLogLite {
             Action action = new AbstractAction(name) {
                 @Override
                 public void actionPerformed(java.awt.event.ActionEvent event) {
-                    if (!requiresDocument || activeDocument() != null) command.run();
+                    try { if (!requiresDocument || activeDocument() != null) command.run(); }
+                    catch (Exception exception) { showError(frame, exception); }
                     if (activeDocument() == null || !activeDocument().saving) updateActions();
                 }
             };
@@ -318,8 +409,8 @@ public class ScriptLogLite {
         DocumentTab addDocument(ReplayLog loaded, Path path) {
             int id = ++sequence;
             LoggingFilter filter = new LoggingFilter();
-            filter.automaticPath = id == 1 ? LOG_PATH
-                    : Path.of("document-filter-" + java.util.UUID.randomUUID() + ".json");
+            try { filter.automaticPath = allocateRecording(recordingVariables, java.time.LocalDate.now()); }
+            catch (IOException exception) { throw new java.io.UncheckedIOException(exception); }
             filter.startSession("");
             DocumentTab document = new DocumentTab(this, filter, "Untitled " + id);
             if (loaded != null) restoreLog(document.text, filter, loaded);
@@ -391,10 +482,13 @@ public class ScriptLogLite {
         }
 
         void open(boolean replay) {
-            if (chooser.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) return;
-            Path path = chooser.getSelectedFile().toPath();
+            openChooser.setCurrentDirectory(directories.directory("open").toFile());
+            openChooser.setSelectedFile(null);
+            if (openChooser.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) return;
+            Path path = openChooser.getSelectedFile().toPath();
             try {
                 ReplayLog loaded = ReplayLog.load(path, -1);
+                directories.remember("open", path);
                 if (replay) addReplay(loaded, path.getFileName().toString());
                 else addDocument(loaded, path);
             } catch (Exception exception) { showError(frame, exception); }
@@ -406,9 +500,12 @@ public class ScriptLogLite {
             if (document == null || document.saving) return false;
             Path path = document.savedPath;
             if (saveAs || path == null) {
-                chooser.setSelectedFile(path == null ? new java.io.File("saved-document.json") : path.toFile());
-                if (chooser.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) return false;
-                path = chooser.getSelectedFile().toPath();
+                Path directory = directories.directory("save");
+                saveChooser.setCurrentDirectory(directory.toFile());
+                saveChooser.setSelectedFile(directory.resolve(path == null ? document.filter.automaticPath.getFileName().toString()
+                        : path.getFileName().toString()).toFile());
+                if (saveChooser.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) return false;
+                path = saveChooser.getSelectedFile().toPath();
                 if (Files.exists(path) && JOptionPane.showConfirmDialog(frame,
                         "Replace " + path + "?", "Save Log", JOptionPane.YES_NO_OPTION)
                         != JOptionPane.YES_OPTION) return false;
@@ -432,6 +529,7 @@ public class ScriptLogLite {
                         showError(frame, exception);
                         return;
                     }
+                    directories.remember("save", target);
                     document.savedPath = target;
                     // Edits recorded after the snapshot must remain marked as unsaved.
                     document.savedEntries = snapshot.events.size();
@@ -560,7 +658,8 @@ public class ScriptLogLite {
     }
 
     static JScrollPane createScrollPane(JTextArea text, LoggingFilter filter) {
-        JScrollPane scroll = new JScrollPane(text);
+        JScrollPane scroll = new JScrollPane(text, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS,
+                JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         text.putClientProperty("logScrollPane", scroll);
         Point[] previous = {new Point()};
         scroll.getViewport().addChangeListener(event -> {
@@ -576,8 +675,11 @@ public class ScriptLogLite {
     static void applyScroll(JScrollPane scroll, int x, int y) {
         Dimension preferred = scroll.getViewport().getView().getPreferredSize();
         Dimension extent = scroll.getViewport().getExtentSize();
+        boolean wrapped = scroll.getViewport().getView() instanceof JTextArea
+                && ((JTextArea) scroll.getViewport().getView()).getLineWrap();
         scroll.getViewport().setViewSize(new Dimension(
-                Math.max(preferred.width, extent.width), Math.max(preferred.height, extent.height)));
+                wrapped ? extent.width : Math.max(preferred.width, extent.width),
+                Math.max(preferred.height, extent.height)));
         Dimension size = scroll.getViewport().getViewSize();
         scroll.getViewport().setViewPosition(new Point(
                 Math.min(x, Math.max(0, size.width - extent.width)),
@@ -639,6 +741,8 @@ public class ScriptLogLite {
 
     private static JTextArea createTextArea(LoggingFilter filter) {
         JTextArea text = new JTextArea(12, 50);
+        text.setLineWrap(true);
+        text.setWrapStyleWord(true);
         text.setFont(new java.awt.Font(java.awt.Font.SANS_SERIF, java.awt.Font.PLAIN, 16));
         text.setMargin(new java.awt.Insets(12, 12, 12, 12));
         filter.metadata.putIfAbsent("fontFamily", text.getFont().getFamily());
@@ -646,9 +750,13 @@ public class ScriptLogLite {
         text.addComponentListener(new java.awt.event.ComponentAdapter() {
             private void capture() {
                 synchronized (filter) {
-                    filter.metadata.put("TextAreaWidth", text.getWidth());
-                    filter.metadata.put("TextAreaHeight", text.getHeight());
-                    Point location = text.isShowing() ? text.getLocationOnScreen() : text.getLocation();
+                    JScrollPane pane = (JScrollPane) text.getClientProperty("logScrollPane");
+                    javax.swing.JViewport viewport = pane == null ? null : pane.getViewport();
+                    Dimension size = viewport == null ? text.getSize() : viewport.getExtentSize();
+                    java.awt.Component area = viewport == null ? text : viewport;
+                    filter.metadata.put("TextAreaWidth", size.width);
+                    filter.metadata.put("TextAreaHeight", size.height);
+                    Point location = area.isShowing() ? area.getLocationOnScreen() : area.getLocation();
                     filter.metadata.put("TextAreaX", location.x);
                     filter.metadata.put("TextAreaY", location.y);
                     filter.changed();
@@ -877,7 +985,7 @@ public class ScriptLogLite {
         final Map<String, Object> metadata = new LinkedHashMap<>();
         boolean dirty = true;
         long revision, automaticRevision = -1;
-        Path automaticPath = LOG_PATH;
+        Path automaticPath = workingDirectory().resolve("unassigned.json");
         Runnable onRecord = () -> { };
         boolean restoring;
         Instant lastTime = Instant.MIN;
@@ -897,6 +1005,11 @@ public class ScriptLogLite {
         }
         synchronized void changed() { dirty = true; revision++; }
         void startSession(String text) { append(new SessionEvent(timestamp(), text)); }
+        synchronized ReplayLog replay() {
+            ReplayLog result = new ReplayLog(entries);
+            result.metadata.putAll(metadata);
+            return result;
+        }
         synchronized SaveSnapshot snapshot() { return new SaveSnapshot(entries, metadata, revision); }
         void save(Path path) throws IOException {
             if (path.toAbsolutePath().normalize().equals(automaticPath.toAbsolutePath().normalize())
@@ -1121,11 +1234,48 @@ public class ScriptLogLite {
         }
     }
 
+    static final class ReplayCaret extends javax.swing.text.DefaultCaret {
+        @Override public void focusLost(java.awt.event.FocusEvent event) { setVisible(true); setSelectionVisible(true); }
+        @Override protected void adjustVisibility(java.awt.Rectangle rectangle) { } // Only recorded scrolling moves the view.
+    }
+
+    static final class SpacedTextArea extends JTextArea {
+        double spacing = 1.0;
+        @Override public java.awt.FontMetrics getFontMetrics(java.awt.Font font) {
+            java.awt.FontMetrics base = super.getFontMetrics(font);
+            double factor = spacing > 0 && Double.isFinite(spacing) ? spacing : 1.0;
+            if (factor == 1.0) return base;
+            return new java.awt.FontMetrics(font) {
+                @Override public int getHeight() { return Math.max(1, (int) Math.ceil(base.getHeight() * factor)); }
+                @Override public int getAscent() { return base.getAscent(); }
+                @Override public int getDescent() { return base.getDescent(); }
+                @Override public int getLeading() { return getHeight() - getAscent() - getDescent(); }
+                @Override public int charWidth(char c) { return base.charWidth(c); }
+                @Override public int charWidth(int c) { return base.charWidth(c); }
+                @Override public int stringWidth(String value) { return base.stringWidth(value); }
+                @Override public int charsWidth(char[] values, int offset, int length) { return base.charsWidth(values, offset, length); }
+            };
+        }
+    }
+
     static class ReplayWindow {
         final ReplayLog log;
         final ReplayCursor cursor;
-        final JTextArea text = new JTextArea(12, 50);
-        final JScrollPane scroll = new JScrollPane(text);
+        final SpacedTextArea text = new SpacedTextArea();
+        final JScrollPane scroll = new JScrollPane(text, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS,
+                JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        final javax.swing.JSlider timeline = new javax.swing.JSlider() {
+            @Override public Point getMousePosition() throws java.awt.HeadlessException {
+                return java.awt.GraphicsEnvironment.isHeadless() ? null : super.getMousePosition();
+            }
+        };
+        final JButton stop = new JButton("Stop");
+        final JButton fastForward = new JButton("Fast forward ×4");
+        final JButton beginning = new JButton("Beginning");
+        final JButton end = new JButton("End");
+        final long durationNanos;
+        final int recordedWidth, recordedHeight, recordedX, recordedY;
+        boolean updatingTimeline;
         final JLabel status = new JLabel();
         final JButton play = new JButton("Play");
         final JComboBox<String> speed = new JComboBox<>(
@@ -1140,20 +1290,86 @@ public class ScriptLogLite {
             this.log = log;
             cursor = new ReplayCursor(log);
             text.setEditable(false);
+            text.setLineWrap(true);
+            text.setWrapStyleWord(true);
+            text.setMargin(new java.awt.Insets(12, 12, 12, 12));
+            String family = String.valueOf(log.metadata.getOrDefault("fontFamily", java.awt.Font.SANS_SERIF));
+            int size = metadataInt("fontSize", 16);
+            text.setFont(new java.awt.Font(family, java.awt.Font.PLAIN, Math.max(1, size)));
+            Object spacing = log.metadata.get("lineSpacing");
+            text.spacing = spacing instanceof Number ? Math.max(0.1, ((Number) spacing).doubleValue()) : 1.0;
+            text.setCaret(new ReplayCaret());
+            text.getCaret().setBlinkRate(0);
+            text.getCaret().setVisible(true);
+            text.getCaret().setSelectionVisible(true);
+            recordedWidth = Math.max(1, metadataInt("TextAreaWidth", 720));
+            recordedHeight = Math.max(1, metadataInt("TextAreaHeight", 450));
+            recordedX = metadataInt("TextAreaX", 0);
+            recordedY = metadataInt("TextAreaY", 0);
+            long eventDuration = offset(log.events.size() - 1);
+            long headerDuration = log.metadata.get("endTime") instanceof Number && log.metadata.get("startTime") instanceof Number
+                    ? ((Number) log.metadata.get("endTime")).longValue() - ((Number) log.metadata.get("startTime")).longValue() : 0;
+            durationNanos = Math.max(eventDuration, Math.max(0, headerDuration));
+            setupTimeline();
+            stop.addActionListener(event -> pause());
+            fastForward.addActionListener(event -> { speed.setSelectedItem("4"); start(); });
+            beginning.addActionListener(event -> seek(0));
+            end.addActionListener(event -> seekTime(durationNanos));
             speed.setSelectedItem("1");
             timer = new Timer(10, event -> tick());
             play.addActionListener(event -> {
                 if (timer.isRunning()) { tick(); pause(); }
-                else if (position < log.states.size() - 1) {
-                    lastTick = System.nanoTime();
-                    timer.start();
-                    play.setText("Pause");
-                }
+                else start();
             });
             // Accrue elapsed time at the previous speed before changing it.
             speed.addActionListener(event -> {
                 if (timer.isRunning()) tick();
                 playbackSpeed = multiplier();
+            });
+        }
+
+        int metadataInt(String key, int fallback) {
+            Object value = log.metadata.get(key);
+            return value instanceof Number && ((Number) value).longValue() != 0
+                    ? Math.toIntExact(((Number) value).longValue()) : fallback;
+        }
+        long offset(int index) { return Duration.between(log.events.get(0).time, log.events.get(index).time).toNanos(); }
+        long currentTime() { return Math.min(durationNanos, offset(position) + (long) elapsedNanos); }
+        void start() {
+            if (currentTime() >= durationNanos) return;
+            lastTick = System.nanoTime(); timer.start(); play.setText("Pause");
+        }
+        void seekTime(long nanos) {
+            pause();
+            nanos = Math.max(0, Math.min(durationNanos, nanos));
+            int low = 0, high = log.events.size();
+            while (low + 1 < high) {
+                int middle = (low + high) >>> 1;
+                if (offset(middle) <= nanos) low = middle; else high = middle;
+            }
+            position = low;
+            elapsedNanos = nanos - offset(position);
+            render();
+        }
+        void setupTimeline() {
+            timeline.setMinimum(0);
+            timeline.setMaximum((int) Math.max(1, Math.min(Integer.MAX_VALUE, Math.ceil(durationNanos / 1e6))));
+            timeline.setValue(0);
+            double seconds = durationNanos / 1e9;
+            double rough = Math.max(0.001, seconds / 8);
+            double magnitude = Math.pow(10, Math.floor(Math.log10(rough)));
+            double step = magnitude * (rough / magnitude <= 1 ? 1 : rough / magnitude <= 2 ? 2 : rough / magnitude <= 5 ? 5 : 10);
+            java.util.Hashtable<Integer, JLabel> labels = new java.util.Hashtable<>();
+            for (double second = 0; second <= seconds + 1e-9; second += step) {
+                int value = durationNanos == 0 ? 0 : (int) Math.round(second * 1e9 / durationNanos * timeline.getMaximum());
+                labels.put(value, new JLabel(String.format(java.util.Locale.ROOT, "%s (s)",
+                        String.format(java.util.Locale.ROOT, "%." + Math.max(0, (int) Math.ceil(-Math.log10(step))) + "f", second).trim())));
+            }
+            timeline.setMajorTickSpacing(Math.max(1, durationNanos == 0 ? 1
+                    : (int) Math.round(step * 1e9 / durationNanos * timeline.getMaximum())));
+            timeline.setLabelTable(labels); timeline.setPaintTicks(true); timeline.setPaintLabels(true);
+            timeline.addChangeListener(event -> {
+                if (!updatingTimeline) seekTime((long) ((double) timeline.getValue() / timeline.getMaximum() * durationNanos));
             });
         }
 
@@ -1178,7 +1394,7 @@ public class ScriptLogLite {
                 position++;
             }
             render();
-            if (position == log.states.size() - 1) pause();
+            if (currentTime() >= durationNanos) { elapsedNanos = durationNanos - offset(position); pause(); }
         }
 
         void pause() {
@@ -1199,6 +1415,11 @@ public class ScriptLogLite {
             if (!text.getText().equals(state.text)) text.setText(state.text);
             text.setCaretPosition(state.mark);
             text.moveCaretPosition(state.dot);
+            text.getCaret().setVisible(true);
+            text.getCaret().setSelectionVisible(true);
+            updatingTimeline = true;
+            timeline.setValue(durationNanos == 0 ? 0 : (int) Math.round((double) currentTime() / durationNanos * timeline.getMaximum()));
+            updatingTimeline = false;
             applyScroll(scroll, state.scrollX, state.scrollY);
             status.setText("Event " + position + "/" + (log.states.size() - 1)
                     + " — " + state.description);
@@ -1210,26 +1431,58 @@ public class ScriptLogLite {
             forward.addActionListener(event -> seek(log.nextEdit(position)));
             JButton backward = new JButton("Previous edit");
             backward.addActionListener(event -> seek(log.previousEdit(position)));
-            JButton reset = new JButton("Restart");
-            reset.addActionListener(event -> seek(0));
+
             JPanel controls = new JPanel();
             controls.add(backward);
             controls.add(forward);
             controls.add(play);
             controls.add(new JLabel("Speed ×"));
             controls.add(speed);
-            controls.add(reset);
+            controls.add(stop);
+            controls.add(fastForward);
+            controls.add(beginning);
+            controls.add(end);
             JPanel frame = new JPanel(new java.awt.BorderLayout(0, 8));
             status.setBorder(BorderFactory.createEmptyBorder(8, 10, 0, 10));
             frame.add(status, java.awt.BorderLayout.NORTH);
-            frame.add(scroll, java.awt.BorderLayout.CENTER);
-            frame.add(controls, java.awt.BorderLayout.SOUTH);
+            JPanel canvas = new JPanel(null);
+            int x = 0, y = 0; // Recorded screen coordinates are retained but not applied yet.
+            int scrollbarWidth = scroll.getVerticalScrollBar().getPreferredSize().width;
+            java.awt.Insets border = scroll.getInsets();
+            scroll.setBounds(x - border.left, y - border.top, recordedWidth + scrollbarWidth + border.left + border.right,
+                    recordedHeight + border.top + border.bottom);
+            canvas.add(scroll);
+            canvas.setPreferredSize(new Dimension(x + scroll.getWidth(), y + scroll.getHeight()));
+            JScrollPane stage = new JScrollPane(canvas, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS,
+                    JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+            stage.setBorder(BorderFactory.createEmptyBorder());
+            frame.add(stage, java.awt.BorderLayout.CENTER);
+            JPanel navigation = new JPanel(new java.awt.BorderLayout());
+            JPanel timelinePadding = new JPanel(new java.awt.BorderLayout());
+            timelinePadding.setBorder(BorderFactory.createEmptyBorder(12, 28, 10, 28));
+            timelinePadding.add(timeline, java.awt.BorderLayout.CENTER);
+            navigation.add(timelinePadding, java.awt.BorderLayout.NORTH);
+            navigation.add(controls, java.awt.BorderLayout.SOUTH);
+            frame.add(navigation, java.awt.BorderLayout.SOUTH);
             render();
             return frame;
         }
     }
 
     static void testReplay() throws Exception {
+        Path original = workingRoot;
+        Path temporary = Files.createTempDirectory("scriptloglite-working-directory-test");
+        workingRoot = temporary;
+        try { testReplayChecks(); }
+        finally {
+            workingRoot = original;
+            try (java.util.stream.Stream<Path> paths = Files.walk(temporary)) {
+                for (Path path : (Iterable<Path>) paths.sorted(java.util.Comparator.reverseOrder())::iterator) Files.deleteIfExists(path);
+            }
+        }
+    }
+
+    static void testReplayChecks() throws Exception {
         String special = "A\n\"\\\t\r😀";
         List<String> lines = List.of(
                 "2026-01-01T00:00:00Z session initialText=\"\"",
@@ -1298,8 +1551,125 @@ public class ScriptLogLite {
         testTabs();
         testReversibleHistory();
         testBackgroundSaving();
+        testDirectoryHistory();
+        testRecordingPaths();
+        testReplayControls();
         testThemes();
         System.out.println("Replay self-test passed");
+    }
+
+    static void testRecordingPaths() throws Exception {
+        Path previous = workingRoot;
+        workingRoot = previous.resolve("allocation");
+        java.util.concurrent.ExecutorService threads = java.util.concurrent.Executors.newFixedThreadPool(4);
+        try {
+            check(!Files.exists(workingRoot), "new working directory starts absent");
+            check(Files.isDirectory(workingDirectory()), "working directory is created");
+            RecordingVariables defaults = new RecordingVariables("expr", "_", "subj");
+            java.time.LocalDate day = java.time.LocalDate.of(2026, 10, 8);
+            Path first = allocateRecording(defaults, day);
+            check(first.equals(workingRoot.resolve("expr_subj/2026-10-08_1/expr_subj_sll_1.json")),
+                    "default automatic log hierarchy");
+            Files.writeString(first, "existing recording");
+            Path second = allocateRecording(defaults, day);
+            check(second.getFileName().toString().equals("expr_subj_sll_1.json"), "new folders start with file index one");
+            Path collision = nextLogFile(first.getParent(), defaults.prefix());
+            check(collision.getFileName().toString().equals("expr_subj_sll_2.json"), "existing file increments file index");
+            Files.writeString(collision, "second file");
+            check(nextLogFile(first.getParent(), defaults.prefix()).getFileName().toString().equals("expr_subj_sll_3.json"),
+                    "file index skips occupied names in the same directory");
+            Path third = allocateRecording(new RecordingVariables("expr", "_", "subj"), day.plusDays(1));
+            check(third.getParent().getFileName().toString().equals("2026-10-09_3"),
+                    "numbering persists across instances and dates");
+            List<java.util.concurrent.Future<Path>> futures = new ArrayList<>();
+            for (int i = 0; i < 4; i++) futures.add(threads.submit(() -> allocateRecording(defaults, day.plusDays(1))));
+            java.util.Set<Path> reserved = new java.util.HashSet<>();
+            for (java.util.concurrent.Future<Path> future : futures) reserved.add(future.get());
+            check(reserved.size() == 4, "concurrent recordings reserve distinct directories");
+            check(Files.readString(first).equals("existing recording"), "existing recordings are preserved");
+            Path custom = allocateRecording(new RecordingVariables("study", "-control-", "p01"), day);
+            check(custom.getFileName().toString().equals("study-control-p01_sll_1.json"),
+                    "experiment/condition/subject control naming and separate numbering");
+        } finally {
+            threads.shutdown();
+            workingRoot = previous;
+        }
+    }
+
+    static void testReplayControls() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            Instant start = Instant.EPOCH;
+            ReplayLog log = new ReplayLog(List.of(new SessionEvent(start, ""),
+                    new EditEvent(start.plusSeconds(1), EventType.INSERT, 0, "", "Hello world"),
+                    new CaretLogEvent(start.plusSeconds(2), 8, 2),
+                    new EditEvent(start.plusSeconds(3), EventType.REMOVE, 5, " world", null)));
+            log.metadata.putAll(Map.of("fontFamily", "Monospaced", "fontSize", 24, "lineSpacing", 1.5,
+                    "TextAreaWidth", 320, "TextAreaHeight", 180, "TextAreaX", 30, "TextAreaY", 40,
+                    "startTime", 0L, "endTime", 5_000_000_000L));
+            ReplayWindow window = new ReplayWindow(log);
+            window.panel();
+            window.scroll.doLayout();
+            check(window.scroll.getViewport().getExtentSize().equals(new Dimension(320, 180)),
+                    "recorded editor dimensions");
+            check(window.scroll.getX() + window.scroll.getViewport().getX() == 0
+                    && window.scroll.getY() + window.scroll.getViewport().getY() == 0, "replay editor starts in upper-left corner");
+            check(window.text.getFont().getSize() == 24 && window.text.getFont().getName().equals("Monospaced")
+                    && window.text.spacing == 1.5, "recorded font and line spacing");
+            check(window.scroll.getVerticalScrollBarPolicy() == JScrollPane.VERTICAL_SCROLLBAR_ALWAYS
+                    && window.scroll.getHorizontalScrollBarPolicy() == JScrollPane.HORIZONTAL_SCROLLBAR_NEVER,
+                    "replay scrollbar policy");
+            window.seekTime(2_500_000_000L);
+            check(window.position == 2 && window.text.getCaret().getDot() == 8
+                    && window.text.getCaret().getMark() == 2, "seek restores selection");
+            ((ReplayCaret) window.text.getCaret()).focusLost(new java.awt.event.FocusEvent(
+                    window.text, java.awt.event.FocusEvent.FOCUS_LOST));
+            check(window.text.getCaret().isVisible() && window.text.getCaret().isSelectionVisible(),
+                    "caret and selection remain visible without focus");
+            window.timeline.setValue(1500);
+            check(window.position == 1 && !window.timer.isRunning()
+                    && window.currentTime() == 1_500_000_000L, "slider seeks immediately between events");
+            window.fastForward.doClick();
+            check(window.playbackSpeed == 4 && window.timer.isRunning(), "fast forward starts at 4x");
+            window.stop.doClick();
+            check(!window.timer.isRunning(), "stop halts playback");
+            window.end.doClick();
+            check(window.position == 3 && window.currentTime() == 5_000_000_000L
+                    && window.timeline.getValue() == window.timeline.getMaximum(), "end includes recorded idle tail");
+            window.beginning.doClick();
+            check(window.position == 0 && window.currentTime() == 0 && window.text.getText().isEmpty(),
+                    "beginning restores initial state");
+            check(window.timeline.getPaintTicks() && window.timeline.getPaintLabels()
+                    && window.timeline.getLabelTable().size() <= 12, "readable time tick labels");
+        });
+    }
+
+    static void testDirectoryHistory() throws Exception {
+        Path root = Files.createTempDirectory("scriptloglite-directory-test");
+        Path open = Files.createDirectory(root.resolve("open"));
+        Path save = Files.createDirectory(root.resolve("save"));
+        Path settings = root.resolve("directories.properties");
+        try {
+            DirectoryHistory history = new DirectoryHistory(settings);
+            history.remember("open", open.resolve("opened.json"));
+            history.remember("save", save.resolve("saved.json"));
+            DirectoryHistory reopened = new DirectoryHistory(settings);
+            check(reopened.directory("open").equals(open) && reopened.directory("save").equals(save),
+                    "independent open/save directories survive restart");
+            SwingUtilities.invokeAndWait(() -> {
+                TabbedApplication app = new TabbedApplication(reopened);
+                check(app.openChooser.getCurrentDirectory().toPath().equals(open)
+                        && app.saveChooser.getCurrentDirectory().toPath().equals(save),
+                        "choosers use their own remembered directories");
+            });
+            Files.delete(open);
+            check(new DirectoryHistory(settings).directory("open").equals(workingDirectory()),
+                    "missing remembered directory falls back safely");
+        } finally {
+            Files.deleteIfExists(settings);
+            Files.deleteIfExists(open);
+            Files.deleteIfExists(save);
+            Files.deleteIfExists(root);
+        }
     }
 
     static void testReversibleHistory() {
@@ -1343,7 +1713,7 @@ public class ScriptLogLite {
         int[] capturedEntries = new int[1];
         try {
             SwingUtilities.invokeAndWait(() -> {
-                TabbedApplication app = new TabbedApplication();
+                TabbedApplication app = new TabbedApplication(new DirectoryHistory(directory.resolve("directories.properties")));
                 application[0] = app;
                 DocumentTab tab = app.addDocument(null, null);
                 document[0] = tab;
@@ -1601,19 +1971,23 @@ public class ScriptLogLite {
             scroll.setSize(200, 100);
             scroll.doLayout();
             text.setText(("Long line " + "x".repeat(100) + "\n").repeat(50));
+            check(text.getLineWrap() && text.getWrapStyleWord(), "recording wraps at right edge");
+            check(scroll.getVerticalScrollBarPolicy() == JScrollPane.VERTICAL_SCROLLBAR_ALWAYS
+                    && scroll.getHorizontalScrollBarPolicy() == JScrollPane.HORIZONTAL_SCROLLBAR_NEVER,
+                    "recording scrollbar policy");
             applyScroll(scroll, 80, 120);
             ReplayLog replay = ReplayLog.parse(new ArrayList<>(filter.entries));
             ReplayState state = replay.states.get(replay.states.size() - 1);
-            check(state.scrollX == 80 && state.scrollY == 120, "both scroll axes logged");
+            check(state.scrollX == 0 && state.scrollY == 120, "wrapped recording logs vertical scroll");
             restoreLog(text, filter, replay);
-            check(scroll.getViewport().getViewPosition().equals(new Point(80, 120)),
+            check(scroll.getViewport().getViewPosition().equals(new Point(0, 120)),
                     "open restores scroll position");
             checkHistory(replay, ReplayLog.parse(filter.entries), "scroll restoration is not logged");
             ReplayWindow window = new ReplayWindow(replay);
             window.scroll.setSize(200, 100);
             window.scroll.doLayout();
             window.seek(replay.states.size() - 1);
-            check(window.scroll.getViewport().getViewPosition().equals(new Point(80, 120)),
+            check(window.scroll.getViewport().getViewPosition().equals(new Point(0, 120)),
                     "replay restores scroll position");
             window.seek(0);
             check(window.scroll.getViewport().getViewPosition().equals(new Point()),

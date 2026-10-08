@@ -47,9 +47,16 @@ allows edits through. Swing often calls `replace` for typing. Document operation
 that Swing ignores before reaching the filter do not produce filter events.
 Events are recorded in JSON logs without printing them to stdout.
 
+Recording editors wrap at the right edge (at word boundaries where possible),
+with the vertical scrollbar always visible and the horizontal scrollbar hidden.
+Open and Save dialogs remember separate directories across runs. Successful
+opens and saves update their respective directory, stored in
+`~/.config/scriptloglite/directories.properties`. Missing directories fall back
+to `~/ScriptLogLiteWD`.
+
 ## JSON log format
 
-Saved logs and the automatic `document-filter.json` use the same structure as
+Saved logs and automatic recording logs use the same structure as
 `exp_subj_json_1.json`: `[[metadata], [events]]`. For example:
 
 ```json
@@ -109,14 +116,40 @@ Save As asks before replacing an existing file.
 ./run.sh --open exp_subj_json_1.json
 ```
 
-Named saved files change only when you use Save Log. Each document also has its
-own automatic JSON log. Every 500 ms, changed documents are queued for background
-saving; they are also queued when closing and flushed at normal shutdown.
-The first document uses `document-filter.json`; additional documents
-use `document-filter-<unique-id>.json`. The status bar shows the selected
-document's automatic filename. The first automatic file is replaced on a new
-run; save a named copy to keep it. Saving over automatic files is blocked. File
-replacement uses a temporary file and an atomic move when supported.
+At startup the application creates `~/ScriptLogLiteWD` if needed. This is the
+default directory for Save/Open dialogs when there is no valid remembered
+directory. Explicitly chosen Open and Save directories are still remembered.
+
+Automatic recordings always live under this working directory. The current
+variables are **Experiment = `expr`**, **Condition = `_`**, and **Subject = `subj`**.
+The directory and filename prefix concatenates those three values, giving
+`expr_subj`. For example:
+
+```text
+~/ScriptLogLiteWD/
+  expr_subj/
+    2026-10-08_1/
+      expr_subj_sll_1.json
+    2026-10-08_2/
+      expr_subj_sll_1.json
+    2026-10-09_3/
+      expr_subj_sll_1.json
+```
+
+Each new document or opened recording gets a fresh automatic recording folder.
+The numeric index increases within its Experiment/Condition/Subject group,
+including across dates and application restarts. Directories are reserved
+atomically, so simultaneous recordings cannot reuse a folder. The filename index
+is independent: it starts at `sll_1` in each folder, using `sll_2`, `sll_3`, etc.
+only if those preceding filenames already exist in that folder. Autosave keeps
+updating its allocated file. Earlier recordings are retained.
+Controls for changing these variables will be added later.
+
+Named saved files change only when you use Save Log. Every 500 ms, changed
+documents are queued for background automatic saving; they are also queued when
+closing and flushed at normal shutdown. The status bar shows the automatic
+filename. Saving over an automatic file is blocked. File replacement uses a
+temporary file and an atomic move when supported.
 
 Save Log captures the current event history and returns immediately while a
 worker writes it. You can keep editing; events added after that snapshot remain
@@ -142,6 +175,17 @@ one session; its session number is always 1.
 
 **Replay current log** replays the current history, including unsaved edits.
 Replay viewers open as tabs alongside the documents.
+The replay editor wraps text, always shows its vertical scrollbar, and hides its
+horizontal scrollbar. The recorded caret and selection remain visible even
+when focus moves to playback controls. Font family, size, and line-spacing
+multiplier come from the log header. An unavailable font uses Java's fallback.
+
+The recorded editor width/height are reproduced on a fixed-size canvas in the
+replay tab. For now the editor starts at the upper-left corner; recorded x/y
+remain in the log but are not applied. Enlarge the application to see recordings
+wider than the current tab.
+New recordings store the visible editor viewport's geometry. The canvas keeps
+that geometry when the application is resized.
 You can also open a saved log directly for replay:
 
 ```sh
@@ -153,7 +197,12 @@ You can also open a saved log directly for replay:
 - **Speed ×** selects 0.25, 0.5, 1 (real time), 2, 4, or 8 times recorded speed.
 - **Next edit / Previous edit** applies or undoes one edit plus subsequent caret,
   key, and scroll events, and pauses playback.
-- **Restart** returns to the initial state.
+- **Stop** halts playback at the current position.
+- **Fast forward ×4** selects 4× speed and starts playback.
+- **Beginning / End** jump to the start or recorded end, including idle time after
+  the last event.
+- The timeline slider seeks immediately while dragging and pauses playback.
+  Tick labels use `0 (s)`, `10 (s)`, etc., with spacing chosen for the session duration. The slider has padding around its edges.
 
 Keys are shown in the status line rather than injected into Swing, which would
 repeat the edits. Scroll positions are clamped when the replay window has a
