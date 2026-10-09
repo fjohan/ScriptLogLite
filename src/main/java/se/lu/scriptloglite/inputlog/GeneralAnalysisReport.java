@@ -1,4 +1,5 @@
-package se.lu.scriptloglite;
+package se.lu.scriptloglite.inputlog;
+
 
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
@@ -15,7 +16,7 @@ import javax.swing.text.html.HTMLEditorKit;
 import javax.swing.text.html.parser.ParserDelegator;
 
 /** HTML presentation and comparison, kept independent of calculation. */
-final class GeneralAnalysisReport {
+public final class GeneralAnalysisReport {
     static final class Comparison {
         int matched, missing, extra;
         final int[] equal = new int[20], different = new int[20];
@@ -105,7 +106,7 @@ final class GeneralAnalysisReport {
         out.append("</tbody></table></div><h2>Reconstructed final text</h2><pre>").append(escape(analysis.log.finalText)).append("</pre></body></html>");
         return out.toString();
     }
-    static void save(GeneralAnalysis analysis, String title, Path target, Path reference) throws Exception {
+    public static void save(GeneralAnalysis analysis, String title, Path target, Path reference) throws Exception {
         Comparison comparison = reference == null ? null : compare(analysis, Files.readString(reference, StandardCharsets.UTF_8));
         Files.writeString(target, html(analysis, title, comparison), StandardCharsets.UTF_8);
     }

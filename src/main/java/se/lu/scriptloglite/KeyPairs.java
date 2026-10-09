@@ -6,8 +6,8 @@ import java.util.List;
 import java.util.Map;
 
 /** Explicit stroke IDs take precedence; legacy auto-repeat releases close the latest press. */
-final class KeyPairs {
-    static Map<Integer, Integer> pair(List<LogEvent> events) {
+public final class KeyPairs {
+    public static Map<Integer, Integer> pair(List<LogEvent> events) {
         Map<Integer, Integer> result = new HashMap<>();
         Map<String, Integer> identified = new HashMap<>();
         Map<String, ArrayDeque<Integer>> pending = new HashMap<>();

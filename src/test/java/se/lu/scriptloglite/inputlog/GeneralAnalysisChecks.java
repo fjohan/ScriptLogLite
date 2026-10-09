@@ -1,4 +1,6 @@
-package se.lu.scriptloglite;
+package se.lu.scriptloglite.inputlog;
+
+import se.lu.scriptloglite.*;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -7,8 +9,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-final class GeneralAnalysisChecks {
-    static void run() throws Exception {
+public final class GeneralAnalysisChecks {
+    public static void run() throws Exception {
         Path input = Path.of("JF_92.idfx"), reference = Path.of("JF_20261008_92_GA.html");
         if (Files.exists(input) && Files.exists(reference)) {
             ReplayLog imported = ReplayLog.load(input, -1);
@@ -25,9 +27,9 @@ final class GeneralAnalysisChecks {
             String generated = GeneralAnalysisReport.html(analysis, "<unsafe>&title", comparison);
             check(generated.contains("&lt;unsafe&gt;&amp;title"), "report escapes text");
             check(GeneralAnalysisReport.readRows(generated).size() == 331, "generated event table readable");
-            GeneralAnalysis restored = GeneralAnalysis.analyzeSource(JsonLogCodec.load(JsonLogCodec.export(imported.events, imported.metadata)));
+            GeneralAnalysis restored = GeneralAnalysis.analyzeSource(AnalysisTestSupport.jsonRoundTrip(imported));
             check(GeneralAnalysisReport.compare(restored, Files.readString(reference)).differences.isEmpty(), "saved JSON retains analysis provenance");
-            GeneralAnalysis raw = GeneralAnalysis.analyzeSource(RawLogCodec.load(RawLogCodec.export(imported)));
+            GeneralAnalysis raw = GeneralAnalysis.analyzeSource(AnalysisTestSupport.rawRoundTrip(imported));
             check(raw.audit.isEmpty() && GeneralAnalysisReport.compare(raw, Files.readString(reference)).differences.isEmpty(), "saved raw retains analysis provenance");
             GeneralAnalysis.Row first = analysis.rows.get(0);
             first.production++;
@@ -55,11 +57,11 @@ final class GeneralAnalysisChecks {
             ReplayLog continued = new ReplayLog(continuedEvents); continued.metadata.putAll(imported.metadata);
             check(GeneralAnalysis.analyze(continued).log.finalText.endsWith(" continued"), "continued recording does not analyse stale imported prefix");
             check(GeneralAnalysis.analyzeSource(continued).log.finalText.equals(imported.finalText), "source mode explicitly limits itself to the imported session");
-            ReplayLog restoredInternal = JsonLogCodec.load(JsonLogCodec.export(imported.events, imported.metadata));
+            ReplayLog restoredInternal = AnalysisTestSupport.jsonRoundTrip(imported);
             check(cells(internal).equals(cells(GeneralAnalysis.analyze(restoredInternal))), "internal IDFX/JSON tables identical");
-            check(cells(internal).equals(cells(GeneralAnalysis.analyze(RawLogCodec.load(RawLogCodec.export(imported))))), "internal IDFX/raw tables identical");
+            check(cells(internal).equals(cells(GeneralAnalysis.analyze(AnalysisTestSupport.rawRoundTrip(imported)))), "internal IDFX/raw tables identical");
             ReplayLog poisoned = new ReplayLog(imported.events); poisoned.metadata.putAll(imported.metadata);
-            Object records = new Json(Json.stringify(imported.metadata.get("inputlogGeneralEvents"), 0)).parse();
+            Object records = AnalysisTestSupport.copyJson(imported.metadata.get("inputlogGeneralEvents"));
             for (Object item : (List<?>) records) {
                 Map<?, ?> record = (Map<?, ?>) item;
                 for (Object part : (List<?>) record.get("parts")) for (Object field : (List<?>) ((Map<?, ?>) part).get("fields")) {
@@ -96,8 +98,8 @@ final class GeneralAnalysisChecks {
         check(pairs.size() == 1 && pairs.get(1) == 7, "explicit stroke identity preserves parent release through auto-repeat");
         GeneralAnalysis repeated = GeneralAnalysis.analyze(repeat);
         check(repeated.rows.get(0).action == 50 && repeated.rows.get(1).action == 0, "missing repeat release is not paired with a future unrelated release");
-        ReplayLog jsonRepeat = JsonLogCodec.load(JsonLogCodec.export(repeat.events, repeat.metadata));
-        ReplayLog rawRepeat = RawLogCodec.load(RawLogCodec.export(repeat));
+        ReplayLog jsonRepeat = AnalysisTestSupport.jsonRoundTrip(repeat);
+        ReplayLog rawRepeat = AnalysisTestSupport.rawRoundTrip(repeat);
         check(KeyPairs.pair(jsonRepeat.events).equals(pairs) && KeyPairs.pair(rawRepeat.events).equals(pairs), "stroke identity survives JSON/raw");
         check(cells(repeated).equals(cells(GeneralAnalysis.analyze(jsonRepeat))) && cells(repeated).equals(cells(GeneralAnalysis.analyze(rawRepeat))), "repeat timing tables survive JSON/raw");
 

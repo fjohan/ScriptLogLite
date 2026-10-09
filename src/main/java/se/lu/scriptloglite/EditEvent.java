@@ -2,14 +2,14 @@ package se.lu.scriptloglite;
 
 import java.time.Instant;
 
-final class EditEvent extends LogEvent {
-    final int offset;
-    final String removed, inserted; // null inserted is preserved for JSON str:null
-    EditEvent(Instant time, EventType type, int offset, String removed, String inserted) {
+public final class EditEvent extends LogEvent {
+    public final int offset;
+    public final String removed, inserted; // null inserted is preserved for JSON str:null
+    public EditEvent(Instant time, EventType type, int offset, String removed, String inserted) {
         super(time, type);
         this.offset = offset; this.removed = removed; this.inserted = inserted;
     }
-    String replacement() { return inserted == null ? "" : inserted; }
+    public String replacement() { return inserted == null ? "" : inserted; }
     void apply(StringBuilder text) { replace(text, removed, replacement()); }
     void undo(StringBuilder text) { replace(text, replacement(), removed); }
     private void replace(StringBuilder text, String expected, String replacement) {

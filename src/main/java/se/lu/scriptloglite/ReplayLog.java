@@ -13,13 +13,13 @@ import java.nio.file.Path;
 import java.time.Instant;
 
 /** Validated event history with view state and sparse text checkpoints. */
-class ReplayLog {
-    final List<LogEvent> events;
-    final Map<String, Object> metadata = new LinkedHashMap<>();
+public final class ReplayLog {
+    public final List<LogEvent> events;
+    public final Map<String, Object> metadata = new LinkedHashMap<>();
     final List<ViewState> views = new ArrayList<>();
     final List<Integer> boundaries = new ArrayList<>();
     final java.util.NavigableMap<Integer, String> checkpoints = new java.util.TreeMap<>();
-    final String initialText, finalText;
+    public final String initialText, finalText;
     // Compatibility convenience: get() materializes one state, not an array of text snapshots.
     final List<ReplayState> states = new java.util.AbstractList<ReplayState>() {
         public int size() { return events.size(); }
@@ -27,7 +27,7 @@ class ReplayLog {
     };
     static final Pattern FIELD = Pattern.compile("(\\w+)=(\"(?:\\\\.|[^\"\\\\])*+\"|\\S+)");
 
-    ReplayLog(List<LogEvent> input) {
+    public ReplayLog(List<LogEvent> input) {
         if (input.isEmpty() || !(input.get(0) instanceof SessionEvent)) {
             throw new IllegalArgumentException("Missing session");
         }
@@ -116,7 +116,7 @@ class ReplayLog {
         return value;
     }
     static String decode(String value) { return value.startsWith("\"") ? (String) new Json(value).parse() : value.equals("null") ? null : value; }
-    static ReplayLog load(Path path, int session) throws Exception {
+    public static ReplayLog load(Path path, int session) throws Exception {
         String content = Files.readString(path, StandardCharsets.UTF_8);
         if (content.startsWith("\uFEFF")) content = content.substring(1);
         if (content.stripLeading().startsWith("<")) {

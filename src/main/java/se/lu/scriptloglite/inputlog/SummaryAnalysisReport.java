@@ -1,4 +1,5 @@
-package se.lu.scriptloglite;
+package se.lu.scriptloglite.inputlog;
+
 
 import java.io.StringReader;
 import java.nio.file.Files;
@@ -13,7 +14,7 @@ import javax.swing.text.html.HTMLEditorKit;
 import javax.swing.text.html.parser.ParserDelegator;
 
 /** Presentation and fixture comparison never participate in calculating summary statistics. */
-final class SummaryAnalysisReport {
+public final class SummaryAnalysisReport {
     static final class Comparison {
         int equal, different, missing, extra;
         final Map<String, String> expected = new LinkedHashMap<>();
@@ -125,7 +126,7 @@ final class SummaryAnalysisReport {
         }
         return out.append("<h2>Reconstructed final text</h2><pre>").append(escape(analysis.log.finalText)).append("</pre></body></html>").toString();
     }
-    static void save(SummaryAnalysis analysis, String title, Path path, Path reference) throws Exception {
+    public static void save(SummaryAnalysis analysis, String title, Path path, Path reference) throws Exception {
         Comparison comparison = reference == null ? null : compare(analysis, Files.readString(reference));
         Files.writeString(path, html(analysis, title, comparison));
     }

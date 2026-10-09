@@ -1,4 +1,8 @@
-package se.lu.scriptloglite;
+package se.lu.scriptloglite.inputlog;
+
+import se.lu.scriptloglite.ReplayLog;
+import se.lu.scriptloglite.DirectoryHistory;
+import se.lu.scriptloglite.EditorSupport;
 
 import java.awt.BorderLayout;
 import java.nio.file.Path;
@@ -13,13 +17,13 @@ import javax.swing.SwingWorker;
 import javax.swing.table.AbstractTableModel;
 
 /** Analysis results stay separate from the recording/replay tabs. */
-final class GeneralAnalysisPanel extends JPanel {
+public final class GeneralAnalysisPanel extends JPanel {
     GeneralAnalysis analysis;
     final ReplayLog history;
     GeneralAnalysisReport.Comparison comparison;
     final JTextArea summary = new JTextArea();
     final String title;
-    GeneralAnalysisPanel(GeneralAnalysis analysis, String title, DirectoryHistory directories) {
+    public GeneralAnalysisPanel(GeneralAnalysis analysis, String title, DirectoryHistory directories) {
         super(new BorderLayout(8, 8)); this.analysis = analysis; this.history = analysis.log; this.title = title;
         summary.setEditable(false); summary.setLineWrap(true); summary.setWrapStyleWord(true);
         summary.setMargin(new java.awt.Insets(12, 12, 12, 12));

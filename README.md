@@ -79,7 +79,7 @@ characters, and key locations when present.
 JSON alone is the default. Select either format or both; at least one must remain
 selected. The choice is remembered across runs and applies to named saves and
 automatic logs, including already open documents. Both uses matching basenames:
-`expr_subj_sll_1.json` and `expr_subj_sll_1.txt`. Each output is written in the
+`exp_subj_sll_1.json` and `exp_subj_sll_1.txt`. Each output is written in the
 background using the same captured history. Existing outputs are retained when
 a format is later disabled. Save As normalizes extensions and asks before
 replacing any selected output. File replacement is atomic per output when
@@ -152,24 +152,24 @@ default directory for Save/Open dialogs when there is no valid remembered
 directory. Explicitly chosen Open and Save directories are still remembered.
 
 Automatic recordings always live under this working directory. The current
-variables are **Experiment = `expr`**, **Condition = `_`**, and **Subject = `subj`**.
+variables are **Experiment = `exp`**, **Condition = `_`**, and **Subject = `subj`**.
 The directory and filename prefix concatenates those three values, giving
-`expr_subj`. For example:
+`exp_subj`. For example:
 
 ```text
 ~/ScriptLogLiteWD/
-  expr_subj/
+  exp_subj/
     2026-10-08_1/
-      expr_subj_sll_1.json
+      exp_subj_sll_1.json
     2026-10-08_2/
-      expr_subj_sll_1.json
-    2026-10-09_3/
-      expr_subj_sll_1.json
+      exp_subj_sll_1.json
+    2026-10-09_1/
+      exp_subj_sll_1.json
 ```
 
 Each new document or opened recording gets a fresh automatic recording folder.
-The numeric index increases within its Experiment/Condition/Subject group,
-including across dates and application restarts. Directories are reserved
+The numeric index increases within each date and Experiment/Condition/Subject
+group, starting at 1 for a new date and continuing across application restarts. Directories are reserved
 atomically, so simultaneous recordings cannot reuse a folder. The filename index
 is independent: it starts at `sll_1` in each folder, using `sll_2`, `sll_3`, etc.
 only if those preceding filenames already exist in that folder. Autosave keeps
@@ -268,8 +268,10 @@ very large histories still take longer to save.
 
 ## Code organization
 
-The project stays in one Maven module and the package `se.lu.scriptloglite`.
-Classes are separated under `src/main/java/se/lu/scriptloglite`:
+The project stays in one Maven module. Recording, replay and file handling live
+in `se.lu.scriptloglite`; Inputlog-compatible analyses live in
+`se.lu.scriptloglite.inputlog`. Source folders follow these package names under
+`src/main/java`:
 
 | Area | Classes |
 | --- | --- |
@@ -280,6 +282,8 @@ Classes are separated under `src/main/java/se/lu/scriptloglite`:
 | Replay | `ReplayLog`, `ReplayCursor`, `ReplayState`, `ReplayPanel` |
 | JSON and saving | `JsonLogCodec`, `RawLogCodec`, `LogFormat`, `Json`, `SaveSnapshot`, `BackgroundSaver` |
 | Directories and identifiers | `RecordingPaths`, `RecordingVariables`, `DirectoryHistory` |
+| IDFX conversion (`se.lu.scriptloglite`) | `InputlogImporter`, `InputlogExporter` |
+| Analyses (`se.lu.scriptloglite.inputlog`) | `GeneralAnalysis`, `SummaryAnalysis`, their report/panel classes, `InternalGeneralEvents` |
 
 `RecordingSession` owns event history, metadata, revisions, and snapshots.
 History and metadata are private, with immutable copies provided to readers.
@@ -287,6 +291,15 @@ History and metadata are private, with immutable copies provided to readers.
 `ReplayCaret` and `SpacedTextArea` remain implementation details nested inside
 `ReplayPanel`. Regression checks are in `src/test/java`, outside the application
 artifact.
+
+The analysis package consumes the shared typed events and replay model through
+public entry points and final event fields. Replay's mutable text buffer remains
+internal; analyses can read its length or a reconstructed text snapshot. Analysis
+results and calculation helpers stay package-private except for the entry points
+used by the application and CLI. `KeyPairs` stays in the core package because IDFX
+export and analyses share it. Analysis regression checks follow the new package;
+a test-only `AnalysisTestSupport` bridge exercises JSON/raw codec internals without
+making the codecs part of the public application API.
 
 ## NetBeans
 

@@ -7,10 +7,10 @@ import java.nio.file.Path;
 import static se.lu.scriptloglite.RecordingPaths.workingDirectory;
 
 /** Persists independent last-open and last-save directories. */
-final class DirectoryHistory {
+public final class DirectoryHistory {
     final Path file;
     final java.util.Properties properties = new java.util.Properties();
-    DirectoryHistory(Path file) {
+    public DirectoryHistory(Path file) {
         this.file = file;
         if (Files.isRegularFile(file)) {
             try (java.io.Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
@@ -18,7 +18,7 @@ final class DirectoryHistory {
             } catch (IOException exception) { System.err.println("Cannot read directory preferences: " + exception.getMessage()); }
         }
     }
-    Path directory(String operation) {
+    public Path directory(String operation) {
         String saved = properties.getProperty(operation);
         if (saved != null) {
             try {
@@ -28,7 +28,7 @@ final class DirectoryHistory {
         }
         return workingDirectory();
     }
-    void remember(String operation, Path selectedFile) {
+    public void remember(String operation, Path selectedFile) {
         properties.setProperty(operation, selectedFile.toAbsolutePath().normalize().getParent().toString());
         store();
     }

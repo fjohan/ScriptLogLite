@@ -1,5 +1,10 @@
 package se.lu.scriptloglite;
 
+import se.lu.scriptloglite.inputlog.GeneralAnalysis;
+import se.lu.scriptloglite.inputlog.GeneralAnalysisPanel;
+import se.lu.scriptloglite.inputlog.SummaryAnalysis;
+import se.lu.scriptloglite.inputlog.SummaryAnalysisPanel;
+
 import java.awt.Point;
 import java.awt.Dimension;
 import java.awt.event.KeyEvent;
@@ -52,7 +57,7 @@ class TabbedApplication {
     final JFileChooser saveChooser = new JFileChooser();
     final DirectoryHistory directories;
     final Map<LogFormat, javax.swing.JCheckBoxMenuItem> formatChoices = new java.util.EnumMap<>(LogFormat.class);
-    final RecordingVariables recordingVariables = new RecordingVariables("expr", "_", "subj");
+    final RecordingVariables recordingVariables = new RecordingVariables("exp", "_", "subj");
     final Map<Theme, javax.swing.JRadioButtonMenuItem> themeChoices = new java.util.EnumMap<>(Theme.class);
     Theme theme = Theme.NIMBUS;
     final Timer autosave;

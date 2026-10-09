@@ -1,4 +1,6 @@
-package se.lu.scriptloglite;
+package se.lu.scriptloglite.inputlog;
+
+import se.lu.scriptloglite.*;
 
 import java.awt.event.KeyEvent;
 import java.nio.file.Files;
@@ -9,8 +11,8 @@ import java.util.List;
 import java.util.Map;
 import javax.swing.SwingUtilities;
 
-final class SummaryAnalysisChecks {
-    static void run() throws Exception {
+public final class SummaryAnalysisChecks {
+    public static void run() throws Exception {
         Path input = Path.of("JF_92.idfx"), reference = Path.of("JF_20261008_92_SU_PT0.html");
         if (Files.exists(input) && Files.exists(reference)) {
             ReplayLog imported = ReplayLog.load(input, -1);
@@ -29,8 +31,8 @@ final class SummaryAnalysisChecks {
             check(value(internal, "Standard Deviation Characters/Paragraph").equals("8.990"), "legacy paragraph variance convention");
             check(value(internal, "Standard Deviation Words/Paragraph").equals("2.433"), "independently computed deviation is not forced to match blank fixture");
             check(value(internal, "Total Process Time (s)").equals("116.812"), "process duration includes mouse action duration");
-            check(cells(internal).equals(cells(SummaryAnalysis.analyze(JsonLogCodec.load(JsonLogCodec.export(imported.events, imported.metadata))))), "internal JSON round trip");
-            check(cells(internal).equals(cells(SummaryAnalysis.analyze(RawLogCodec.load(RawLogCodec.export(imported))))), "internal raw round trip");
+            check(cells(internal).equals(cells(SummaryAnalysis.analyze(AnalysisTestSupport.jsonRoundTrip(imported)))), "internal JSON round trip");
+            check(cells(internal).equals(cells(SummaryAnalysis.analyze(AnalysisTestSupport.rawRoundTrip(imported)))), "internal raw round trip");
             ReplayLog stripped = new ReplayLog(imported.events); stripped.metadata.putAll(imported.metadata);
             stripped.metadata.remove("inputlogGeneralEvents");
             check(cells(internal).equals(cells(SummaryAnalysis.analyze(stripped))), "retained source keyboard/edit payloads never supply internal metrics");

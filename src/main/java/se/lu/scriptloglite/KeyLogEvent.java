@@ -2,16 +2,16 @@ package se.lu.scriptloglite;
 
 import java.time.Instant;
 
-final class KeyLogEvent extends LogEvent {
-    final int keyCode;
-    final String keyText, keyChar, modifiersText;
-    final Integer modifiers, keyLocation;
-    final String strokeId;
-    KeyLogEvent(Instant time, EventType type, int keyCode, String keyText, String keyChar,
+public final class KeyLogEvent extends LogEvent {
+    public final int keyCode;
+    public final String keyText, keyChar, modifiersText;
+    public final Integer modifiers, keyLocation;
+    public final String strokeId;
+    public KeyLogEvent(Instant time, EventType type, int keyCode, String keyText, String keyChar,
             Integer modifiers, String modifiersText, Integer keyLocation) {
         this(time, type, keyCode, keyText, keyChar, modifiers, modifiersText, keyLocation, null);
     }
-    KeyLogEvent(Instant time, EventType type, int keyCode, String keyText, String keyChar,
+    public KeyLogEvent(Instant time, EventType type, int keyCode, String keyText, String keyChar,
             Integer modifiers, String modifiersText, Integer keyLocation, String strokeId) {
         super(time, type); this.strokeId = strokeId; this.keyCode = keyCode; this.keyText = keyText; this.keyChar = keyChar;
         this.modifiers = modifiers; this.modifiersText = modifiersText; this.keyLocation = keyLocation;

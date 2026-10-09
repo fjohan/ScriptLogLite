@@ -16,7 +16,7 @@ import javax.swing.text.AbstractDocument;
 import javax.swing.text.BadLocationException;
 
 /** Builds recording editors and restores their text, selection, and scrolling. */
-final class EditorSupport {
+public final class EditorSupport {
     static JScrollPane createScrollPane(JTextArea text, LoggingFilter filter) {
         JScrollPane scroll = new JScrollPane(text, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS,
                 JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
@@ -58,7 +58,7 @@ final class EditorSupport {
         }
     }
 
-    static void showError(java.awt.Component frame, Exception exception) {
+    public static void showError(java.awt.Component frame, Exception exception) {
         JOptionPane.showMessageDialog(frame, exception.getMessage(), "Log error",
                 JOptionPane.ERROR_MESSAGE);
     }

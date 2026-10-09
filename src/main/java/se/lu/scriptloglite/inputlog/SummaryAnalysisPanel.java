@@ -1,4 +1,8 @@
-package se.lu.scriptloglite;
+package se.lu.scriptloglite.inputlog;
+
+import se.lu.scriptloglite.ReplayLog;
+import se.lu.scriptloglite.DirectoryHistory;
+import se.lu.scriptloglite.EditorSupport;
 
 import java.awt.BorderLayout;
 import java.nio.file.Files;
@@ -13,7 +17,7 @@ import javax.swing.JScrollPane;
 import javax.swing.SwingWorker;
 
 /** PT0 summary and optional reference comparison in a separate, read-only application tab. */
-final class SummaryAnalysisPanel extends JPanel {
+public final class SummaryAnalysisPanel extends JPanel {
     private SummaryAnalysis analysis;
     private SummaryAnalysisReport.Comparison comparison;
     private final ReplayLog history;
@@ -21,7 +25,7 @@ final class SummaryAnalysisPanel extends JPanel {
     private final JComboBox<String> mode = new JComboBox<>(new String[] {"Internal events / reconstructed text", "Retained Inputlog source events"});
     private final JButton compare = new JButton("Compare Inputlog HTML…"), save = new JButton("Save HTML report…");
     private final String title;
-    SummaryAnalysisPanel(SummaryAnalysis analysis, String title, DirectoryHistory directories) {
+    public SummaryAnalysisPanel(SummaryAnalysis analysis, String title, DirectoryHistory directories) {
         super(new BorderLayout(8, 8)); this.analysis = analysis; this.history = analysis.log; this.title = title;
         report.setEditable(false); report.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true);
         JPanel controls = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT));

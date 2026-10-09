@@ -1,4 +1,11 @@
-package se.lu.scriptloglite;
+package se.lu.scriptloglite.inputlog;
+
+import se.lu.scriptloglite.ReplayLog;
+import se.lu.scriptloglite.ReplayCursor;
+import se.lu.scriptloglite.LogEvent;
+import se.lu.scriptloglite.KeyLogEvent;
+import se.lu.scriptloglite.EditEvent;
+import se.lu.scriptloglite.EventType;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -9,7 +16,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** Independently calculated Inputlog-style event table and conversion checks. */
-final class GeneralAnalysis {
+public final class GeneralAnalysis {
     static final List<String> COLUMNS = List.of("#Id", "Event Type", "Output", "Position Full", "Position",
             "DocLength Full", "DocLength", "Character Production", "StartTime", "StartClock", "EndTime",
             "EndClock", "ActionTime", "PauseTime", "PauseLocation", "PauseLocation", "IntervalFixedSize",
@@ -61,10 +68,10 @@ final class GeneralAnalysis {
                     "" + numberInterval, string(x), string(y));
         }
     }
-    static GeneralAnalysis analyze(ReplayLog log) throws Exception {
+    public static GeneralAnalysis analyze(ReplayLog log) throws Exception {
         return new GeneralAnalysis(log, InternalGeneralEvents.build(log), true);
     }
-    static GeneralAnalysis analyzeSource(ReplayLog log) {
+    public static GeneralAnalysis analyzeSource(ReplayLog log) {
         ReplayLog imported = sourceHistory(log);
         GeneralAnalysis result = new GeneralAnalysis(imported, sourceRecords(log.metadata.get("inputlogGeneralEvents")), false);
         if (imported.events.size() < log.events.size()) result.notes.add("Source mode describes the imported session only; " + (log.events.size() - imported.events.size()) + " later native events are excluded. Internal mode includes the complete current history.");

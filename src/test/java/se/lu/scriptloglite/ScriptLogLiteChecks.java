@@ -1,5 +1,8 @@
 package se.lu.scriptloglite;
 
+import se.lu.scriptloglite.inputlog.GeneralAnalysisChecks;
+import se.lu.scriptloglite.inputlog.SummaryAnalysisChecks;
+
 import java.awt.Point;
 import java.awt.Dimension;
 import java.io.IOException;
@@ -196,27 +199,32 @@ public final class ScriptLogLiteChecks {
         try {
             check(!Files.exists(workingRoot), "new working directory starts absent");
             check(Files.isDirectory(workingDirectory()), "working directory is created");
-            RecordingVariables defaults = new RecordingVariables("expr", "_", "subj");
+            RecordingVariables defaults = new RecordingVariables("exp", "_", "subj");
             java.time.LocalDate day = java.time.LocalDate.of(2026, 10, 8);
             Path first = allocateRecording(defaults, day);
-            check(first.equals(workingRoot.resolve("expr_subj/2026-10-08_1/expr_subj_sll_1.json")),
+            check(first.equals(workingRoot.resolve("exp_subj/2026-10-08_1/exp_subj_sll_1.json")),
                     "default automatic log hierarchy");
             Files.writeString(first, "existing recording");
             Path second = allocateRecording(defaults, day);
-            check(second.getFileName().toString().equals("expr_subj_sll_1.json"), "new folders start with file index one");
+            check(second.getFileName().toString().equals("exp_subj_sll_1.json"), "new folders start with file index one");
             Path collision = nextLogFile(first.getParent(), defaults.prefix());
-            check(collision.getFileName().toString().equals("expr_subj_sll_2.json"), "existing file increments file index");
+            check(collision.getFileName().toString().equals("exp_subj_sll_2.json"), "existing file increments file index");
             Files.writeString(collision, "second file");
-            check(nextLogFile(first.getParent(), defaults.prefix()).getFileName().toString().equals("expr_subj_sll_3.json"),
+            check(nextLogFile(first.getParent(), defaults.prefix()).getFileName().toString().equals("exp_subj_sll_3.json"),
                     "file index skips occupied names in the same directory");
-            Path third = allocateRecording(new RecordingVariables("expr", "_", "subj"), day.plusDays(1));
-            check(third.getParent().getFileName().toString().equals("2026-10-09_3"),
-                    "numbering persists across instances and dates");
+            Path third = allocateRecording(new RecordingVariables("exp", "_", "subj"), day.plusDays(1));
+            check(third.getParent().getFileName().toString().equals("2026-10-09_1"),
+                    "new date starts numbering at one");
+            Files.createDirectory(first.getParent().getParent().resolve("2026-10-08_26"));
+            check(allocateRecording(defaults, day).getParent().getFileName().toString().equals("2026-10-08_27"),
+                    "same-date numbering continues from the highest existing index");
             List<java.util.concurrent.Future<Path>> futures = new ArrayList<>();
             for (int i = 0; i < 4; i++) futures.add(threads.submit(() -> allocateRecording(defaults, day.plusDays(1))));
             java.util.Set<Path> reserved = new java.util.HashSet<>();
             for (java.util.concurrent.Future<Path> future : futures) reserved.add(future.get());
             check(reserved.size() == 4, "concurrent recordings reserve distinct directories");
+            check(allocateRecording(defaults, day.plusDays(1)).getParent().getFileName().toString().equals("2026-10-09_6"),
+                    "each date continues its own index across allocations");
             check(Files.readString(first).equals("existing recording"), "existing recordings are preserved");
             Path custom = allocateRecording(new RecordingVariables("study", "-control-", "p01"), day);
             check(custom.getFileName().toString().equals("study-control-p01_sll_1.json"),

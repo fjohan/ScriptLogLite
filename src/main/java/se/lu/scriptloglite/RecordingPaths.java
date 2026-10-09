@@ -18,7 +18,7 @@ final class RecordingPaths {
     static Path allocateRecording(RecordingVariables variables, java.time.LocalDate date) throws IOException {
         Path group = Files.createDirectories(workingDirectory().resolve(variables.prefix()));
         int index = 1;
-        Pattern numbered = Pattern.compile("\\d{4}-\\d{2}-\\d{2}_(\\d+)");
+        Pattern numbered = Pattern.compile(Pattern.quote(date.toString()) + "_(\\d+)");
         try (java.util.stream.Stream<Path> children = Files.list(group)) {
             for (Path child : (Iterable<Path>) children::iterator) {
                 Matcher matcher = numbered.matcher(child.getFileName().toString());

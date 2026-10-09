@@ -1,4 +1,7 @@
-package se.lu.scriptloglite;
+package se.lu.scriptloglite.inputlog;
+
+import se.lu.scriptloglite.ReplayLog;
+import se.lu.scriptloglite.EditEvent;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -7,7 +10,7 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /** Process statistics from the event stream, with separate statistics of the replayed product. */
-final class SummaryAnalysis {
+public final class SummaryAnalysis {
     static final class Metric {
         final String section, label, value;
         Metric(String section, String label, String value) { this.section = section; this.label = label; this.value = value; }
@@ -25,8 +28,8 @@ final class SummaryAnalysis {
     private int typed, spaces, formatting, inserted, replaced;
     long processMillis;
 
-    static SummaryAnalysis analyze(ReplayLog log) { return new SummaryAnalysis(log, InternalGeneralEvents.build(log), true); }
-    static SummaryAnalysis analyzeSource(ReplayLog log) {
+    public static SummaryAnalysis analyze(ReplayLog log) { return new SummaryAnalysis(log, InternalGeneralEvents.build(log), true); }
+    public static SummaryAnalysis analyzeSource(ReplayLog log) {
         ReplayLog imported = GeneralAnalysis.sourceHistory(log);
         SummaryAnalysis result = new SummaryAnalysis(imported, GeneralAnalysis.sourceRecords(log.metadata.get("inputlogGeneralEvents")), false);
         if (imported.events.size() < log.events.size()) result.notes.add("Source mode excludes " + (log.events.size() - imported.events.size()) + " later native events; internal mode includes the full history.");

@@ -2,9 +2,9 @@ package se.lu.scriptloglite;
 
 import java.time.Instant;
 
-class ReplayState {
+public final class ReplayState {
     final Instant time;
-    final String text;
+    public final String text;
     final int dot, mark, scrollX, scrollY;
     final String description;
     final boolean edit;

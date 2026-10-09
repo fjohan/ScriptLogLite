@@ -1,4 +1,14 @@
-package se.lu.scriptloglite;
+package se.lu.scriptloglite.inputlog;
+
+import se.lu.scriptloglite.ReplayLog;
+import se.lu.scriptloglite.ReplayCursor;
+import se.lu.scriptloglite.LogEvent;
+import se.lu.scriptloglite.KeyLogEvent;
+import se.lu.scriptloglite.EditEvent;
+import se.lu.scriptloglite.CaretLogEvent;
+import se.lu.scriptloglite.ScrollLogEvent;
+import se.lu.scriptloglite.EventType;
+import se.lu.scriptloglite.KeyPairs;
 
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
@@ -74,7 +84,7 @@ final class InternalGeneralEvents {
             if (item.context != null) {
                 source = item.context;
                 source.word.put("position", Integer.toString(Math.min(dot, mark)));
-                source.word.put("documentLength", Integer.toString(cursor.text.length() + 1));
+                source.word.put("documentLength", Integer.toString(cursor.textLength() + 1));
             } else {
                 LogEvent event = log.events.get(item.index);
                 source = new GeneralAnalysis.Source(); source.index = item.index;
@@ -100,17 +110,17 @@ final class InternalGeneralEvents {
                         int position = action == null ? Math.min(dot, mark) : action.offset
                                 + (key.keyCode == KeyEvent.VK_BACK_SPACE ? action.removed.length() : 0);
                         source.word.put("position", Integer.toString(position));
-                        source.word.put("documentLength", Integer.toString(cursor.text.length() + 1));
+                        source.word.put("documentLength", Integer.toString(cursor.textLength() + 1));
                     } else held.remove(key.keyCode);
                 } else if (event instanceof EditEvent) {
                     EditEvent edit = (EditEvent) event;
                     cursor.seek(item.index);
                     produced += edit.replacement().length();
-                    dot = Math.min(dot, cursor.text.length()); mark = Math.min(mark, cursor.text.length());
+                    dot = Math.min(dot, cursor.textLength()); mark = Math.min(mark, cursor.textLength());
                     if (!owners.containsKey(item.index)) {
                         source.type = edit.removed.isEmpty() ? "insert" : "replacement";
                         source.word.put("position", Integer.toString(edit.offset));
-                        source.word.put("documentLength", Integer.toString(cursor.text.length() + 1));
+                        source.word.put("documentLength", Integer.toString(cursor.textLength() + 1));
                         source.word.put("start", Integer.toString(edit.offset));
                         source.word.put("end", Integer.toString(edit.offset + edit.removed.length()));
                         source.word.put("newtext", escaped(edit.replacement()));
@@ -123,7 +133,7 @@ final class InternalGeneralEvents {
                     source.win.put("x", Integer.toString(scroll.x)); source.win.put("y", Integer.toString(scroll.y));
                     source.win.put("startTime", Long.toString(item.time)); source.win.put("endTime", Long.toString(item.time));
                     source.word.put("position", Integer.toString(Math.min(dot, mark)));
-                    source.word.put("documentLength", Integer.toString(cursor.text.length() + 1));
+                    source.word.put("documentLength", Integer.toString(cursor.textLength() + 1));
                 } else if (event instanceof CaretLogEvent) {
                     CaretLogEvent caret = (CaretLogEvent) event; dot = caret.dot; mark = caret.mark;
                 }

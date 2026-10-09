@@ -1,5 +1,10 @@
 package se.lu.scriptloglite;
 
+import se.lu.scriptloglite.inputlog.GeneralAnalysis;
+import se.lu.scriptloglite.inputlog.GeneralAnalysisReport;
+import se.lu.scriptloglite.inputlog.SummaryAnalysis;
+import se.lu.scriptloglite.inputlog.SummaryAnalysisReport;
+
 import java.nio.file.Path;
 import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
@@ -79,7 +84,7 @@ public final class ScriptLogLite {
         final ReplayLog initialLog = opened;
         if (args.length == 1 && args[0].equals("--demo")) {
             LoggingFilter filter = new LoggingFilter();
-            filter.session.automaticPath = allocateRecording(new RecordingVariables("expr", "_", "subj"), java.time.LocalDate.now());
+            filter.session.automaticPath = allocateRecording(new RecordingVariables("exp", "_", "subj"), java.time.LocalDate.now());
             filter.startSession("");
             SwingUtilities.invokeAndWait(() -> edit(() -> {
                 JTextArea text = createTextArea(filter);

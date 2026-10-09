@@ -1,6 +1,6 @@
 package se.lu.scriptloglite;
 
-enum EventType {
+public enum EventType {
     SESSION("session", 0), INSERT("insertString", 101), REMOVE("remove", 102),
     REPLACE("replace", 103), CARET("caretUpdate", 104), SCROLL("scrollChange", 107),
     KEY_PRESSED("keyPressed", 207), KEY_RELEASED("keyReleased", 208);
