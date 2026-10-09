@@ -294,7 +294,7 @@ public final class GeneralAnalysis {
             Row row = rows.get(i); if (row.location == 1 || row.location == 15 || row.location == 2 || row.location == 3) row.location = 5; break;
         }
     }
-    private static int pauseLocation(Source source, List<Source> list, int index) {
+    static int pauseLocation(Source source, List<Source> list, int index) {
         String key = source.key(), value = source.value();
         if (modifier(key) || value.isEmpty() && !source.modifiers().isEmpty()) return 12;
         if (List.of("VK_BACK", "VK_DELETE", "VK_CLEAR", "VK_ESCAPE").contains(key)) return 11;

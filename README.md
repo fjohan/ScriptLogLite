@@ -283,7 +283,7 @@ in `se.lu.scriptloglite`; Inputlog-compatible analyses live in
 | JSON and saving | `JsonLogCodec`, `RawLogCodec`, `LogFormat`, `Json`, `SaveSnapshot`, `BackgroundSaver` |
 | Directories and identifiers | `RecordingPaths`, `RecordingVariables`, `DirectoryHistory` |
 | IDFX conversion (`se.lu.scriptloglite`) | `InputlogImporter`, `InputlogExporter` |
-| Analyses (`se.lu.scriptloglite.inputlog`) | `GeneralAnalysis`, `SummaryAnalysis`, `SNotationAnalysis`, `WordPausesAnalysis`, `LinearAnalysis`, `RevisionHistory`, report/panel classes, `InternalGeneralEvents` |
+| Analyses (`se.lu.scriptloglite.inputlog`) | `GeneralAnalysis`, `SummaryAnalysis`, `SNotationAnalysis`, `WordPausesAnalysis`, `LinearAnalysis`, `PauseAnalysis`, `RevisionHistory`, report/panel classes, `InternalGeneralEvents` |
 
 `RecordingSession` owns event history, metadata, revisions, and snapshots.
 History and metadata are private, with immutable copies provided to readers.
@@ -348,7 +348,7 @@ java -jar target/scriptloglite-1.0-SNAPSHOT.jar
 ```
 
 Keep `target/lib` alongside the JAR: its manifest references FlatLaf there.
-The application JAR accepts `--open`, `--replay`, `--export-idfx`, `--general-analysis`, `--summary-analysis`, `--s-notation`, `--word-pauses`, `--linear-analysis`, and `--demo`; the regression
+The application JAR accepts `--open`, `--replay`, `--export-idfx`, `--general-analysis`, `--summary-analysis`, `--s-notation`, `--word-pauses`, `--linear-analysis`, `--pause-analysis`, and `--demo`; the regression
 suite is separate and runs with `mvn test` or `./run.sh --self-test`.
 
 Checks cover editing, Unicode/escaping, forward/backward replay, timing/speeds,
@@ -788,3 +788,96 @@ edits and continuation, source-payload independence, mismatched parameter errors
 literal HTML handling, empty histories and sparse long intervals. Only fixed-length
 interval splitting is implemented; Inputlog's focus/revision/pause-based splitting
 and condensed secondary score are separate features.
+
+
+## Pause Analysis: pause distributions and P-bursts
+
+Choose **Analysis → Pause Analysis…** from a recording or replay tab. Calculations
+use internal events by default and work for IDFX, JSON and raw logs. The report
+includes process/pause/active-writing time, pause counts and arithmetic/geometric
+means, medians, population deviations, log-transformed 95% confidence intervals,
+pause locations, combined boundary pauses, P-bursts, and summaries per interval.
+The reconstructed text and a table of counted action gaps accompany the results.
+
+Set parameters and press **Update analysis**:
+
+- **PT (ms)**: minimum pause duration, default **200**, inclusive. PT0 counts only
+  positive gaps, not zero-time markers.
+- **FN (intervals)**: fixed **number** of equal-duration intervals, default **5**.
+  Interval length is process time divided by FN, rounded up to a millisecond.
+  Internal intervals use the arriving action's elapsed time, with an event on an
+  exact boundary assigned to the next interval. FN may be 1–10000; short/empty
+  sessions can have empty intervals.
+- **P-burst (ms)**: independent threshold separating activity sequences, default
+  **2000**. PT does not filter bursts. Typed whitespace counts as characters;
+  pasted text does not. Focus changes reset the burst gap anchor.
+
+Pause gaps use keyboard start-to-start timing, as in Inputlog. After mouse or
+viewport actions they use the preceding end time. Actual standalone edits are
+included; typing edits associated with key presses are not duplicated. Initial
+text does not manufacture activity, and initial delay before the first observed
+action cannot be inferred. Pause-location rules use the independently implemented
+General Analysis lexical rules rather than Inputlog's configurable FSM. These are
+process measures, including subsequently deleted writing, not final-product counts.
+Combined boundary pauses are a separate view and must not be added to pause totals.
+
+**Retained Inputlog source events** mode reproduces the supplied
+`JF_20261008_92_PA_PT200_FN5.html`: **all 198 metrics agree exactly**, including
+151 pauses, 85.345 seconds of pause time and three P-bursts. Calculation does not
+read the reference. Compatibility mode retains delayed interval assignment, its
+closing-event timing convention, modifier augmentation and small-sample blanks/
+zeros. Internal mode uses actual edits, assigns gaps to their arriving interval,
+counts each modifier gap once in combined boundaries, clamps overlapping gaps,
+and calculates mathematically defined small-sample statistics (a confidence
+interval still needs at least two observations). Source mode describes only the
+imported prefix; internal mode includes later edits. Missing source provenance is
+reported rather than silently substituting internal mode.
+
+**Compare Inputlog HTML…** compares metrics by section and label, including empty
+cells, and validates PT, FN and P-burst parameters. **Save HTML report…** saves a
+standalone report with optional comparison. Calculations, comparison and saving
+run in background workers. Other Inputlog grouping modes and multiple-threshold
+runs are not included in this fixed-number implementation.
+
+```sh
+./run.sh --pause-analysis JF_92.idfx JF_92_sll_PA_PT200_FN5.html \
+  --pt 200 --fn 5 --compare JF_20261008_92_PA_PT200_FN5.html
+./run.sh --pause-analysis JF_92.idfx JF_92_sll_source_PA_PT200_FN5.html \
+  --source-events --pt 200 --fn 5 --compare JF_20261008_92_PA_PT200_FN5.html
+./run.sh --pause-analysis exp_subj_json_1.json /tmp/native-pauses.html --pt 500 --fn 10 --pb 2000
+```
+
+Regression checks cover the complete source fixture, internal JSON/raw persistence,
+independence from raw source keys/edits, native continuation, parameter mismatches,
+thresholds and interval assignments, small-sample statistics and Student-t critical
+values, empty sessions and HTML escaping.
+
+
+### Pause Analysis validation with JF_97
+
+`JF_20261009_97_PA_PT200_FN5.html` exposed simultaneous focus/action timestamps:
+source compatibility mode now places focus before an action with the same time.
+This removes three spurious counted pauses and corrects the two following mouse
+gaps. The supplied Inputlog report and source mode agree on the complete overview,
+general statistics, P-bursts and all five interval tables: **273 pauses**, **210.688
+seconds** of pause time and **16 P-bursts**. Overall, **144 of 198 metrics match**;
+**54 differences remain**, all in pause-location or combined-location tables.
+The simpler lexical rules do not implement the full sentence/paragraph FSM. For
+example, source mode currently reports two before-paragraph pauses versus three,
+and zero combined between-paragraph pauses versus two. This fixture does not
+establish full location compatibility.
+
+Internal mode reports **267 pauses** and **193.895 seconds** of pause time. It uses
+the document event stream, excluding the 21 coordinate-less external keystrokes
+identified in the Word Pauses validation, and its own edit/overlap/closing-gap
+conventions. Its totals therefore describe a different stream from Inputlog's
+all-activity source analysis. These differences are not evidence of missing
+document edits; reconstruction is validated separately by the existing JF_97
+import/revision checks. JSON/raw round trips preserve both modes' results.
+
+```sh
+./run.sh --pause-analysis JF_97.idfx JF_97_sll_PA_PT200_FN5.html \
+  --pt 200 --fn 5 --compare JF_20261009_97_PA_PT200_FN5.html
+./run.sh --pause-analysis JF_97.idfx JF_97_sll_source_PA_PT200_FN5.html \
+  --source-events --pt 200 --fn 5 --compare JF_20261009_97_PA_PT200_FN5.html
+```
