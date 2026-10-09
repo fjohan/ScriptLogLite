@@ -37,6 +37,7 @@ public final class CompileSources {
             options.add("src/test/java/se/lu/scriptloglite/inputlog/GeneralAnalysisChecks.java");
             options.add("src/test/java/se/lu/scriptloglite/inputlog/SummaryAnalysisChecks.java");
             options.add("src/test/java/se/lu/scriptloglite/inputlog/RevisionAnalysisChecks.java");
+            options.add("src/test/java/se/lu/scriptloglite/inputlog/LinearAnalysisChecks.java");
         }
         int result = compiler.run(null, System.out, System.err, options.toArray(new String[0]));
         if (result != 0) System.exit(result);

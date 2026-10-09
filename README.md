@@ -35,7 +35,7 @@ The menus provide:
 - **View**: Replay Current Log, Open Log for Replay, and Nimbus/Light/Dark themes.
 - **Tabs**: Next Tab, Previous Tab, Close All, and a list of open tabs.
 - **Settings**: JSON/Raw/Inputlog IDFX save formats.
-- **Analysis**: General Analysis, Summary Analysis (PT0), S-Notation and Word Pauses, with Inputlog HTML comparison and HTML export.
+- **Analysis**: General Analysis, Summary Analysis (PT0), S-Notation, Word Pauses and Linear Analysis, with Inputlog HTML comparison and HTML export.
 - **Help**: About.
 
 Common commands have Ctrl keyboard shortcuts, including Ctrl+N, Ctrl+O, Ctrl+S,
@@ -283,7 +283,7 @@ in `se.lu.scriptloglite`; Inputlog-compatible analyses live in
 | JSON and saving | `JsonLogCodec`, `RawLogCodec`, `LogFormat`, `Json`, `SaveSnapshot`, `BackgroundSaver` |
 | Directories and identifiers | `RecordingPaths`, `RecordingVariables`, `DirectoryHistory` |
 | IDFX conversion (`se.lu.scriptloglite`) | `InputlogImporter`, `InputlogExporter` |
-| Analyses (`se.lu.scriptloglite.inputlog`) | `GeneralAnalysis`, `SummaryAnalysis`, `SNotationAnalysis`, `WordPausesAnalysis`, `RevisionHistory`, report/panel classes, `InternalGeneralEvents` |
+| Analyses (`se.lu.scriptloglite.inputlog`) | `GeneralAnalysis`, `SummaryAnalysis`, `SNotationAnalysis`, `WordPausesAnalysis`, `LinearAnalysis`, `RevisionHistory`, report/panel classes, `InternalGeneralEvents` |
 
 `RecordingSession` owns event history, metadata, revisions, and snapshots.
 History and metadata are private, with immutable copies provided to readers.
@@ -348,7 +348,7 @@ java -jar target/scriptloglite-1.0-SNAPSHOT.jar
 ```
 
 Keep `target/lib` alongside the JAR: its manifest references FlatLaf there.
-The application JAR accepts `--open`, `--replay`, `--export-idfx`, `--general-analysis`, `--summary-analysis`, `--s-notation`, `--word-pauses`, and `--demo`; the regression
+The application JAR accepts `--open`, `--replay`, `--export-idfx`, `--general-analysis`, `--summary-analysis`, `--s-notation`, `--word-pauses`, `--linear-analysis`, and `--demo`; the regression
 suite is separate and runs with `mvn test` or `./run.sh --self-test`.
 
 Checks cover editing, Unicode/escaping, forward/backward replay, timing/speeds,
@@ -722,3 +722,69 @@ boundary handling, initial deleted attempts and one-letter timing conventions
 do not have identical definitions in these two implementations. JSON/raw round
 trips preserve the results and external activity. This fixture validates the
 reconstruction without claiming full Inputlog timing equivalence.
+
+## Linear Analysis: chronological writing score
+
+Choose **Analysis → Linear Analysis…** from a recording/replay tab. The compact
+score follows writing actions in time, including corrections and navigation,
+rather than displaying only the final text. The default is internal events;
+retained Inputlog source mode is also available. Set the two parameters and press
+**Update score**:
+
+- **PT (ms)**: pause threshold in milliseconds, default **200**. Positive gaps at
+  or above the threshold display as blue `{milliseconds}` marks. PT=0 shows all
+  positive gaps; it does not manufacture `{0}` pauses.
+- **FL (s)**: fixed interval length in seconds, default **60**. Events are grouped
+  into `[start,end)` intervals from the first observed action. An event at exactly
+  60 seconds belongs to the next row. The UI accepts 1–86400 seconds; the CLI
+  supports larger values within the timestamp range.
+
+Typed characters appear directly, spaces as `·`, special keys/navigation as gray
+`[KEY]`, and bulk insertions as green `<text>`. Native unassociated deletions and
+replacements display their actual ranges. Key releases, caret markers and typing
+edits already associated with a key are omitted to avoid duplicated writing.
+Focus observations affect timing without displaying long window titles; retained
+mouse actions and native viewport changes remain visible. Literal notation
+delimiters are escaped, and HTML output escapes document text.
+
+Keyboard gaps use start-to-start timing. After mouse/viewport events they use the
+preceding end; focus updates the timing anchor. Standalone native edits also have
+timed gaps. The first mouse action's duration is displayed using Inputlog's
+initial-action convention; it is not idle time before recording. Overlaps produce
+zero idle gap in internal mode. Interval labels are elapsed times, rather than
+the supplied report's Windows-clock values. Long empty intervals are summarized
+as gaps, so a long idle session does not allocate millions of empty score rows.
+Final reconstructed text is presented separately from the score.
+
+**Compare Inputlog HTML…** validates that PT/FL agree with the reference and
+compares every score row, ignoring interval clock labels and invisible zero-width
+space formatting. **Save HTML report…** exports the score, parameters, notes and
+optional reference comparison. Calculation, comparison and saving run in
+background workers.
+
+```sh
+./run.sh --linear-analysis JF_92.idfx JF_92_sll_LA_PT200_FL60.html \
+  --pt 200 --fl 60 --compare JF_20261008_92_LA_PT200_FL60.html
+./run.sh --linear-analysis JF_92.idfx JF_92_sll_source_LA_PT200_FL60.html \
+  --source-events --pt 200 --fl 60 --compare JF_20261008_92_LA_PT200_FL60.html
+./run.sh --linear-analysis exp_subj_json_1.json /tmp/native-linear.html --pt 500 --fl 30
+./run.sh --linear-analysis exp_subj_raw_1.txt /tmp/native-linear-raw.html --pt 500 --fl 30
+```
+
+Source mode matches both score rows in `JF_20261008_92_LA_PT200_FL60.html` exactly
+after excluding the formatting/clock labels described above. It preserves legacy
+rendering conventions: no replacement output, hidden unreleased arrow output,
+only the first timing observation in an unreleased arrow run, and a pause crossing
+an interval boundary remains in the preceding row. Internal mode preserves every
+observed repeat, shows actual range edits, clamps overlapping gaps to zero, and
+puts a pause in the arriving action's interval. These differences are exposed by
+the comparison. Source mode includes retained external keyboard activity and only
+the imported prefix; internal mode describes document events and the full current
+history, with coordinate-less external keys excluded.
+
+Regression checks establish source-fixture agreement and internal JSON/raw
+equivalence, verify threshold inclusion and exact interval boundaries, explicit
+edits and continuation, source-payload independence, mismatched parameter errors,
+literal HTML handling, empty histories and sparse long intervals. Only fixed-length
+interval splitting is implemented; Inputlog's focus/revision/pause-based splitting
+and condensed secondary score are separate features.

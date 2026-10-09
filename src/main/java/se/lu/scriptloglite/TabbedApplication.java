@@ -6,6 +6,8 @@ import se.lu.scriptloglite.inputlog.SummaryAnalysis;
 import se.lu.scriptloglite.inputlog.SummaryAnalysisPanel;
 import se.lu.scriptloglite.inputlog.WordPausesAnalysis;
 import se.lu.scriptloglite.inputlog.RevisionAnalysisPanel;
+import se.lu.scriptloglite.inputlog.LinearAnalysis;
+import se.lu.scriptloglite.inputlog.LinearAnalysisPanel;
 
 import java.awt.Point;
 import java.awt.Dimension;
@@ -170,6 +172,7 @@ class TabbedApplication {
         item(analysisMenu, "Summary Analysis (PT0)…", 0, false, this::summaryAnalysis);
         item(analysisMenu, "S-Notation…", 0, false, () -> analyze(AnalysisKind.SNOTATION));
         item(analysisMenu, "Word Pauses…", 0, false, () -> analyze(AnalysisKind.WORD_PAUSES));
+        item(analysisMenu, "Linear Analysis…", 0, false, () -> analyze(AnalysisKind.LINEAR));
         JMenu help = menu("Help", KeyEvent.VK_H);
         item(help, "About", 0, false, () -> JOptionPane.showMessageDialog(frame,
                 "ScriptLogLite\nEach document has its own JSON edit history.\n"
@@ -314,7 +317,7 @@ class TabbedApplication {
         analyze(AnalysisKind.SUMMARY);
     }
 
-    private enum AnalysisKind { GENERAL, SUMMARY, SNOTATION, WORD_PAUSES }
+    private enum AnalysisKind { GENERAL, SUMMARY, SNOTATION, WORD_PAUSES, LINEAR }
 
     private void analyze(AnalysisKind kind) {
         java.awt.Component selected = tabs.getSelectedComponent();
@@ -328,6 +331,16 @@ class TabbedApplication {
                 source = replays.get(selected).log; title = tabs.getTitleAt(tabs.getSelectedIndex());
             } else { JOptionPane.showMessageDialog(frame, "Select a document or replay tab first."); return; }
         } catch (Exception exception) { showError(frame, exception); return; }
+        if (kind == AnalysisKind.LINEAR) {
+            new javax.swing.SwingWorker<LinearAnalysis, Void>() {
+                protected LinearAnalysis doInBackground() { return LinearAnalysis.analyze(source, 200, 60); }
+                protected void done() {
+                    try { addTab(new LinearAnalysisPanel(get(), title, directories), "Linear Analysis — " + title); }
+                    catch (Exception exception) { showError(frame, exception); }
+                }
+            }.execute();
+            return;
+        }
         if (kind == AnalysisKind.SNOTATION || kind == AnalysisKind.WORD_PAUSES) {
             boolean words = kind == AnalysisKind.WORD_PAUSES;
             new javax.swing.SwingWorker<WordPausesAnalysis, Void>() {

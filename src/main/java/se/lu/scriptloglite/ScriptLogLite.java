@@ -6,6 +6,8 @@ import se.lu.scriptloglite.inputlog.SummaryAnalysis;
 import se.lu.scriptloglite.inputlog.SummaryAnalysisReport;
 import se.lu.scriptloglite.inputlog.WordPausesAnalysis;
 import se.lu.scriptloglite.inputlog.RevisionAnalysisReport;
+import se.lu.scriptloglite.inputlog.LinearAnalysis;
+import se.lu.scriptloglite.inputlog.LinearAnalysisReport;
 
 import java.nio.file.Path;
 import javax.swing.JTextArea;
@@ -22,13 +24,17 @@ public final class ScriptLogLite {
         if (!java.awt.GraphicsEnvironment.isHeadless()) {
             installTheme(Theme.NIMBUS);
         }
-        if (args.length > 0 && java.util.List.of("--general-analysis", "--summary-analysis", "--s-notation", "--word-pauses").contains(args[0])) {
+        if (args.length > 0 && java.util.List.of("--general-analysis", "--summary-analysis", "--s-notation", "--word-pauses", "--linear-analysis").contains(args[0])) {
             boolean revisions = args[0].equals("--s-notation") || args[0].equals("--word-pauses");
-            if (args.length < 3) throw new IllegalArgumentException("Usage: " + args[0] + " INPUT_LOG OUTPUT_HTML " + (revisions ? "" : "[--source-events] ") + "[--compare INPUTLOG_HTML]");
+            boolean linear = args[0].equals("--linear-analysis");
+            if (args.length < 3) throw new IllegalArgumentException("Usage: " + args[0] + " INPUT_LOG OUTPUT_HTML " + (linear ? "[--pt MILLISECONDS] [--fl SECONDS] " : "") + (revisions ? "" : "[--source-events] ") + "[--compare INPUTLOG_HTML]");
             boolean sourceMode = false; Path reference = null;
+            long pauseThreshold = 200, intervalSeconds = 60;
             for (int i = 3; i < args.length; i++) {
                 if (args[i].equals("--source-events")) sourceMode = true;
                 else if (args[i].equals("--compare") && i + 1 < args.length) reference = Path.of(args[++i]);
+                else if (linear && args[i].equals("--pt") && i + 1 < args.length) pauseThreshold = Long.parseLong(args[++i]);
+                else if (linear && args[i].equals("--fl") && i + 1 < args.length) intervalSeconds = Long.parseLong(args[++i]);
                 else throw new IllegalArgumentException("Unknown or incomplete analysis option: " + args[i]);
             }
             if (revisions && sourceMode) throw new IllegalArgumentException("S-Notation and Word Pauses use internal edits; --source-events is not supported.");
@@ -38,6 +44,10 @@ public final class ScriptLogLite {
                 throw new IllegalArgumentException("Choose output separate from input/reference");
             }
             ReplayLog history = ReplayLog.load(input, -1);
+            if (linear) {
+                LinearAnalysis analysis = sourceMode ? LinearAnalysis.analyzeSource(history, pauseThreshold, intervalSeconds) : LinearAnalysis.analyze(history, pauseThreshold, intervalSeconds);
+                LinearAnalysisReport.save(analysis, input.getFileName().toString(), output, reference); return;
+            }
             if (revisions) {
                 RevisionAnalysisReport.save(WordPausesAnalysis.analyze(history), input.getFileName().toString(), output, reference, args[0].equals("--word-pauses"));
                 return;
