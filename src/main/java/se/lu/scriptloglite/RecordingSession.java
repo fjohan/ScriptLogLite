@@ -19,6 +19,11 @@ final class RecordingSession {
         if (values.isEmpty()) throw new IllegalArgumentException("Select at least one save format");
         formats = java.util.EnumSet.copyOf(values); changed();
     }
+    private EditDialect editDialect = EditDialect.RECORDED;
+    synchronized void setEditDialect(EditDialect dialect) {
+        java.util.Objects.requireNonNull(dialect);
+        if (editDialect != dialect) { editDialect = dialect; changed(); }
+    }
     private boolean idfxExtensions = true;
     synchronized void setIdfxExtensions(boolean enabled) {
         if (idfxExtensions != enabled) { idfxExtensions = enabled; changed(); }
@@ -60,7 +65,7 @@ final class RecordingSession {
         result.metadata.putAll(metadata);
         return result;
     }
-    synchronized SaveSnapshot snapshot() { return new SaveSnapshot(entries, metadata, revision, formats, idfxExtensions); }
+    synchronized SaveSnapshot snapshot() { return new SaveSnapshot(entries, metadata, revision, formats, idfxExtensions, editDialect); }
     void save(Path path) throws IOException {
         if (automaticPath != null) {
             for (LogFormat format : formats) {

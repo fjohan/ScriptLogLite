@@ -19,7 +19,11 @@ class JsonLogCodec {
 
     /** Stream one JSON event at a time; no whole-output string or event-map list. */
     static void write(List<LogEvent> events, Map<String, Object> originalMetadata, java.io.Writer writer) throws IOException {
+        write(events, originalMetadata, writer, EditDialect.RECORDED);
+    }
+    static void write(List<LogEvent> events, Map<String, Object> originalMetadata, java.io.Writer writer, EditDialect dialect) throws IOException {
         Map<String, Object> metadata = header(events, originalMetadata);
+        metadata.put("editDialect", dialect.id);
         SessionEvent initial = (SessionEvent) events.get(0);
         long start = number(metadata, "startTime");
         writer.write("[\n  [\n    ");
@@ -31,7 +35,8 @@ class JsonLogCodec {
             Map<String, Object> event = new LinkedHashMap<>();
             event.put("when", Math.addExact(start, elapsed));
             event.put("relativeTime", String.format(java.util.Locale.ROOT, "%.3f", elapsed / 1e9));
-            event.put("event", "<" + item.type.name + ">"); event.put("eventID", item.type.id);
+            EventType outputType = dialect.type(item);
+            event.put("event", "<" + outputType.name + ">"); event.put("eventID", outputType.id);
             if (item instanceof EditEvent) {
                 EditEvent edit = (EditEvent) item;
                 event.put("offset", edit.offset); event.put("length", edit.removed.length());

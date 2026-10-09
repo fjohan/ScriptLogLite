@@ -125,6 +125,12 @@ public final class ReplayLog {
             imported.metadata.put("inputlogSourceFile", path.getFileName().toString());
             return imported;
         }
+        if (content.stripLeading().startsWith("{")) {
+            if (session != -1 && session != 1) throw new IllegalArgumentException("WebScriptLog holds one session");
+            ReplayLog imported = WebScriptLogImporter.load(content);
+            imported.metadata.put("webScriptLogSourceFile", path.getFileName().toString());
+            return imported;
+        }
         if (content.stripLeading().startsWith("[")) {
             if (session != -1 && session != 1) throw new IllegalArgumentException("JSON holds one session");
             return JsonLogCodec.load(content);

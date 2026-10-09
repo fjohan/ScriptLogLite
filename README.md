@@ -348,7 +348,7 @@ java -jar target/scriptloglite-1.0-SNAPSHOT.jar
 ```
 
 Keep `target/lib` alongside the JAR: its manifest references FlatLaf there.
-The application JAR accepts `--open`, `--replay`, `--export-idfx`, `--general-analysis`, `--summary-analysis`, `--s-notation`, `--word-pauses`, `--linear-analysis`, `--pause-analysis`, and `--demo`; the regression
+The application JAR accepts `--open`, `--replay`, `--export-idfx`, `--export-webscriptlog`, `--general-analysis`, `--summary-analysis`, `--s-notation`, `--word-pauses`, `--linear-analysis`, `--pause-analysis`, and `--demo`; the regression
 suite is separate and runs with `mvn test` or `./run.sh --self-test`.
 
 Checks cover editing, Unicode/escaping, forward/backward replay, timing/speeds,
@@ -881,3 +881,123 @@ import/revision checks. JSON/raw round trips preserve both modes' results.
 ./run.sh --pause-analysis JF_97.idfx JF_97_sll_source_PA_PT200_FN5.html \
   --source-events --pt 200 --fn 5 --compare JF_20261009_97_PA_PT200_FN5.html
 ```
+
+
+## Importing WebScriptLog snapshot logs
+
+**File → Open…** and **File → Replay…** accept WebScriptLog JSON objects, including
+`.txt` files such as `wslog_QQQQQQ_09-10-2026_19_54_58.txt`. Detection uses file
+contents, not the extension. Open imports a document that can be continued; replay
+supports the normal speed controls, seeking and stepping both ways. Save as the
+usual ScriptLogLite JSON (default) or raw format to keep working with the converted
+history. No separate document file is needed.
+
+The importer merges `text_records`, `cursor_records` and `key_records` by epoch
+millisecond timestamps. Each changed full snapshot becomes one reversible
+insert/remove/replace using a common prefix/suffix. A simultaneous post-edit cursor
+helps disambiguate repeated characters when its proposed range reconstructs the
+snapshot exactly. UTF-16 surrogate pairs stay intact. Snapshots precede simultaneous
+cursor observations, while keydown precedes and keyup follows them. Cursor pairs
+are interpreted as selectionStart:selectionEnd; backward selection direction is
+unavailable. Header start/end times are preserved, with a closing view marker to
+retain idle time at the end.
+
+Unknown mobile key identities remain `Unidentified`/`undefined`, with key code 0
+and their original press/release timestamps. Available Backspace, Enter and Shift
+identities are preserved. Snapshot text is not used to invent key identities or
+physical key durations. Autocorrections/composition can produce bulk or replacement
+edits; the import represents observed changes without guessing how they were made.
+Initial text is assumed empty, and the first snapshot establishes the first
+observed text; earlier edits cannot be recovered. Unchanged snapshots do not create
+fake edits. Source pointer records and any additional nonempty record streams are
+retained in metadata, with an import report explaining streams not replayed.
+
+The supplied mobile fixture reconstructs **all 296 snapshots exactly**, preserves
+**503 cursor records** and **600 keyboard records** (including **484 unidentified**
+records), and retains **14 pointer records** in metadata. Final text is **209 UTF-16
+units**, and every edit reverses back to the initial empty state. Saved JSON/raw
+logs preserve event times, text and import metadata and can be continued. General,
+Linear, Pause and Word Pauses analyses accept the internal history, but keyboard
+production measures cannot count unavailable mobile characters; unknown keys and
+standalone snapshot edits remain distinct observations. Import geometry/font data
+is unavailable in this header, so normal ScriptLogLite defaults apply.
+
+```sh
+./run.sh --replay wslog_QQQQQQ_09-10-2026_19_54_58.txt
+./run.sh --linear-analysis wslog_QQQQQQ_09-10-2026_19_54_58.txt /tmp/web-linear.html
+./run.sh --word-pauses wslog_QQQQQQ_09-10-2026_19_54_58.txt /tmp/web-word-pauses.html
+```
+
+Regression checks validate every recorded snapshot, exact observed key identities
+and timestamps, reverse replay, JSON/raw saves and continuation, repeated-character
+cursor disambiguation, surrogate replacements, unchanged snapshots, malformed
+records and the internal analysis entry points.
+
+
+## JSON/raw edit dialect
+
+Choose **Settings → JSON/raw edit dialect → Replace insertions (length 0)** to
+save insertion events as `replace` with length 0. JSON uses the corresponding
+replace event ID (103); raw uses `<replace>`. Other replacements and `remove`
+events retain their types. The header records `editDialect: "replace"`.
+**Replace insertions (length 0)** is the default when no dialect preference has
+been saved. **Recorded callbacks** remains selectable and records
+`editDialect: "recorded"`. Explicitly saved dialect choices are retained.
+
+The setting is remembered and applies to current and newly opened documents,
+manual saves and automatic saves. It also works when converting imported web,
+JSON or raw logs through Open and Save As. The captured in-memory history keeps
+its original types; serialization changes the vocabulary without changing edit
+payloads, timestamps, caret/key records or event count. A reopened replace-dialect
+file contains replace events; changing back to Recorded callbacks cannot recover
+which of those events originally came from `insertString`. Keep the original log
+when original callback provenance is needed. IDFX export retains its existing
+mapping and is unaffected by this JSON/raw preference.
+
+No text or timing inference is added, and the conversion streams one event at a
+time. Existing loaders already accept zero-length replace events. Regression
+checks cover both formats, reverse replay at every event, mobile/native fixtures,
+continued writing, matching JSON event IDs, preference persistence and immutable
+background-save snapshots.
+
+
+## Export as WebScriptLog
+
+Use **File → Export as WebScriptLog…** with a document or replay tab selected.
+This is an explicit conversion, separate from Save/Save As, automatic recording
+and the native Save formats settings. It exports the complete captured history,
+not just the current replay position. Export runs in a background worker, writes
+atomically and leaves the document's save path, unsaved status and settings intact.
+
+The `.txt` file is a JSON object matching the supplied WebScriptLog structure:
+`header_records` contains epoch-millisecond start/end times; `text_records` holds
+the full reconstructed text after each edit; `cursor_records` holds normalized
+selectionStart:selectionEnd ranges; `key_records` holds browser-style keydown/keyup
+names. Nonempty initial text becomes an initial snapshot. Known special keys are
+translated to browser names, printable observed characters are retained, and
+unavailable identities become `Unidentified`. Imported web pointer records are
+retained. Original duplicate caret observations are exported as recorded.
+
+Web dictionaries allow only one record of each stream per millisecond, whereas
+native timestamps have finer precision. Colliding timestamps move forward by the
+minimum whole milliseconds needed to avoid overwriting records and preserve
+reimport order; the header end time extends if necessary. The export report gives
+the number of adjusted timestamps, unidentified keys, backward selections whose
+direction cannot be represented, and omitted native scroll events. No native
+scroll conversion is guessed because the sample's web scroll stream is empty;
+retained web scroll/image/window streams pass through. Fonts, styled-text attributes,
+stroke IDs, exact native callback vocabulary and explicit modifier fields do not
+have equivalents in the supplied web schema.
+
+```sh
+./run.sh --export-webscriptlog exp_subj_json_1.json exp_subj_webscriptlog.txt
+./run.sh --export-webscriptlog wslog_QQQQQQ_09-10-2026_19_54_58_sll_replace.json mobile_webscriptlog.txt
+```
+
+Tests reimport mobile, native JSON and IDFX exports and compare every changed text
+snapshot and keyboard-record count. The mobile fixture preserves its original
+text/key/pointer records and timestamps exactly, with the imported closing view
+marker also exported. Tests cover colliding submillisecond events, nonempty initial
+text, selection direction, export limitations, atomic file output and unchanged
+native save state. This validates the supplied schema and ScriptLogLite reimport;
+it does not imply full native-format provenance survives conversion.

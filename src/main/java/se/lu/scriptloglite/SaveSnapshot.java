@@ -15,6 +15,7 @@ final class SaveSnapshot {
     final Map<String, Object> metadata;
     final long revision;
     final boolean idfxExtensions;
+    final EditDialect editDialect;
     final java.util.Set<LogFormat> formats;
     SaveSnapshot(List<LogEvent> events, Map<String, Object> metadata, long revision) {
         this(events, metadata, revision, java.util.EnumSet.of(LogFormat.JSON));
@@ -23,6 +24,10 @@ final class SaveSnapshot {
         this(events, metadata, revision, formats, true);
     }
     SaveSnapshot(List<LogEvent> events, Map<String, Object> metadata, long revision, java.util.Set<LogFormat> formats, boolean idfxExtensions) {
+        this(events, metadata, revision, formats, idfxExtensions, EditDialect.RECORDED);
+    }
+    SaveSnapshot(List<LogEvent> events, Map<String, Object> metadata, long revision, java.util.Set<LogFormat> formats, boolean idfxExtensions, EditDialect editDialect) {
+        this.editDialect = java.util.Objects.requireNonNull(editDialect);
         this.idfxExtensions = idfxExtensions;
         if (formats.isEmpty()) throw new IllegalArgumentException("Select at least one save format");
         this.formats = java.util.Collections.unmodifiableSet(java.util.EnumSet.copyOf(formats));
@@ -38,8 +43,8 @@ final class SaveSnapshot {
                 Path temporary = Files.createTempFile(target.getParent(), ".saved-log-", ".tmp");
                 staged.put(target, temporary);
                 try (java.io.Writer writer = Files.newBufferedWriter(temporary, StandardCharsets.UTF_8)) {
-                    if (format == LogFormat.JSON) JsonLogCodec.write(events, metadata, writer);
-                    else if (format == LogFormat.RAW) RawLogCodec.write(events, metadata, writer);
+                    if (format == LogFormat.JSON) JsonLogCodec.write(events, metadata, writer, editDialect);
+                    else if (format == LogFormat.RAW) RawLogCodec.write(events, metadata, writer, editDialect);
                     else InputlogExporter.write(events, metadata, writer, idfxExtensions);
                     writer.write('\n');
                 }

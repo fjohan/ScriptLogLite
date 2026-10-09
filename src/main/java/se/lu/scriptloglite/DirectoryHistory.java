@@ -44,6 +44,13 @@ public final class DirectoryHistory {
         properties.setProperty("saveFormats", formats.stream().map(Enum::name).collect(java.util.stream.Collectors.joining(",")));
         store();
     }
+    EditDialect editDialect() {
+        try { return EditDialect.valueOf(properties.getProperty("editDialect", "REPLACE")); }
+        catch (IllegalArgumentException ignored) { return EditDialect.REPLACE; }
+    }
+    void rememberEditDialect(EditDialect dialect) {
+        properties.setProperty("editDialect", dialect.name()); store();
+    }
     boolean idfxExtensions() { return Boolean.parseBoolean(properties.getProperty("idfxExtensions", "true")); }
     void rememberIdfxExtensions(boolean enabled) {
         properties.setProperty("idfxExtensions", Boolean.toString(enabled)); store();

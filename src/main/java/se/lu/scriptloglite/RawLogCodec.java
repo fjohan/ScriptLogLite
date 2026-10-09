@@ -18,7 +18,11 @@ final class RawLogCodec {
         return writer.toString();
     }
     static void write(List<LogEvent> events, Map<String, Object> original, Writer writer) throws IOException {
+        write(events, original, writer, EditDialect.RECORDED);
+    }
+    static void write(List<LogEvent> events, Map<String, Object> original, Writer writer, EditDialect dialect) throws IOException {
         Map<String, Object> header = JsonLogCodec.header(events, original);
+        header.put("editDialect", dialect.id);
         for (Map.Entry<String, Object> field : header.entrySet()) {
             writer.write(field.getKey() + ": " + compact(field.getValue()) + "\n");
         }
@@ -29,7 +33,7 @@ final class RawLogCodec {
             LogEvent event = events.get(i);
             long elapsed = Duration.between(initial, event.time).toNanos();
             writer.write(Math.addExact(start, elapsed) + " "
-                    + String.format(java.util.Locale.ROOT, "%.3f", elapsed / 1e9) + " <" + event.type.name + ">");
+                    + String.format(java.util.Locale.ROOT, "%.3f", elapsed / 1e9) + " <" + dialect.type(event).name + ">");
             if (event instanceof EditEvent) {
                 EditEvent edit = (EditEvent) event;
                 writer.write(" " + edit.offset + " " + edit.removed.length());

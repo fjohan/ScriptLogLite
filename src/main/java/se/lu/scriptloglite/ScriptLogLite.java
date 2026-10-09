@@ -70,6 +70,15 @@ public final class ScriptLogLite {
             GeneralAnalysisReport.save(analysis, input.getFileName().toString(), output, reference);
             return;
         }
+        if (args.length > 0 && args[0].equals("--export-webscriptlog")) {
+            if (args.length != 3) throw new IllegalArgumentException("Usage: --export-webscriptlog INPUT_LOG OUTPUT_TXT");
+            Path input = Path.of(args[1]), output = Path.of(args[2]);
+            if (input.toAbsolutePath().normalize().equals(output.toAbsolutePath().normalize())
+                    || java.nio.file.Files.exists(output) && java.nio.file.Files.isSameFile(input, output)) {
+                throw new IllegalArgumentException("Choose an export separate from the input log");
+            }
+            System.out.println(WebScriptLogExporter.save(ReplayLog.load(input, -1), output).description()); return;
+        }
         if (args.length > 0 && args[0].equals("--export-idfx")) {
             if (args.length != 3 && !(args.length == 4 && args[3].equals("--no-lite-labels"))) {
                 throw new IllegalArgumentException("Usage: --export-idfx INPUT_LOG OUTPUT_IDFX [--no-lite-labels]");

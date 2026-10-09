@@ -85,7 +85,7 @@ class TabbedApplication {
         toolbar.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
         status.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
         openChooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
-                "Logs (JSON, raw, Inputlog IDFX)", "json", "txt", "log", "idfx"));
+                "Logs (JSON, raw, Inputlog IDFX, WebScriptLog)", "json", "txt", "log", "idfx"));
         openChooser.setCurrentDirectory(directories.directory("open").toFile());
         saveChooser.setCurrentDirectory(directories.directory("save").toFile());
         JMenu file = menu("File", KeyEvent.VK_F);
@@ -97,6 +97,7 @@ class TabbedApplication {
         Action saveAs = item(file, "Save Log As…", 0, true, () -> save(activeDocument(), true));
         saveAs.putValue(Action.ACCELERATOR_KEY,
                 KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK));
+        item(file, "Export as WebScriptLog…", 0, false, this::exportWebScriptLog);
         file.addSeparator();
         item(file, "Close", KeyEvent.VK_W, false, this::closeActive);
         item(file, "Exit", KeyEvent.VK_Q, false, this::exit);
@@ -154,6 +155,17 @@ class TabbedApplication {
             });
         }
         settings.add(saveFormats);
+        JMenu dialects = new JMenu("JSON/raw edit dialect");
+        javax.swing.ButtonGroup dialectGroup = new javax.swing.ButtonGroup();
+        for (EditDialect dialect : EditDialect.values()) {
+            javax.swing.JRadioButtonMenuItem choice = new javax.swing.JRadioButtonMenuItem(dialect.label, dialect == directories.editDialect());
+            dialectGroup.add(choice); dialects.add(choice);
+            choice.addActionListener(event -> {
+                directories.rememberEditDialect(dialect);
+                for (RecordingSession session : recordings) session.setEditDialect(dialect);
+            });
+        }
+        settings.add(dialects);
         javax.swing.JCheckBoxMenuItem idfxExtensions = new javax.swing.JCheckBoxMenuItem(
                 "Include ScriptLogLite labels in IDFX", directories.idfxExtensions());
         settings.add(idfxExtensions);
@@ -295,6 +307,7 @@ class TabbedApplication {
         catch (IOException exception) { throw new java.io.UncheckedIOException(exception); }
         filter.session.setFormats(directories.formats());
         filter.session.setIdfxExtensions(directories.idfxExtensions());
+        filter.session.setEditDialect(directories.editDialect());
         filter.startSession("");
         DocumentTab document = new DocumentTab(this, filter, "Untitled " + id);
         if (loaded != null) restoreLog(document.text, filter, loaded);
@@ -318,6 +331,44 @@ class TabbedApplication {
 
     void summaryAnalysis() {
         analyze(AnalysisKind.SUMMARY);
+    }
+
+    private void exportWebScriptLog() {
+        java.awt.Component selected = tabs.getSelectedComponent();
+        final ReplayLog history;
+        try {
+            if (selected instanceof DocumentTab) history = ((DocumentTab) selected).filter.session.replay();
+            else if (replays.containsKey(selected)) history = replays.get(selected).log;
+            else { JOptionPane.showMessageDialog(frame, "Select a document or replay tab first."); return; }
+        } catch (Exception exception) { showError(frame, exception); return; }
+        JFileChooser chooser = new JFileChooser(directories.directory("save").toFile());
+        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("WebScriptLog snapshot JSON (*.txt)", "txt"));
+        chooser.setSelectedFile(Path.of("webscriptlog-export.txt").toFile());
+        if (chooser.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) return;
+        Path choice = chooser.getSelectedFile().toPath();
+        final Path target = choice.toString().toLowerCase(java.util.Locale.ROOT).endsWith(".txt") ? choice : choice.resolveSibling(choice.getFileName() + ".txt");
+        try {
+            if (selected instanceof DocumentTab && ((DocumentTab) selected).savedPath != null) {
+                Path source = ((DocumentTab) selected).savedPath;
+                if (target.toAbsolutePath().normalize().equals(source.toAbsolutePath().normalize())
+                        || Files.exists(target) && Files.isSameFile(source, target)) throw new IOException("Choose an export separate from the open log.");
+            }
+            for (RecordingSession recording : recordings) for (LogFormat format : LogFormat.values()) {
+                Path automatic = format.path(recording.automaticPath);
+                if (target.toAbsolutePath().normalize().equals(automatic.toAbsolutePath().normalize())
+                        || Files.exists(target) && Files.exists(automatic) && Files.isSameFile(target, automatic)) throw new IOException("Choose a filename other than an active automatic log.");
+            }
+            if (Files.exists(target) && JOptionPane.showConfirmDialog(frame, "Replace " + target + "?", "Export WebScriptLog", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) return;
+        } catch (Exception exception) { showError(frame, exception); return; }
+        status.setText("Exporting WebScriptLog…");
+        new javax.swing.SwingWorker<WebScriptLogExporter.Report, Void>() {
+            protected WebScriptLogExporter.Report doInBackground() throws Exception { return WebScriptLogExporter.save(history, target); }
+            protected void done() {
+                try { WebScriptLogExporter.Report report = get(); directories.remember("save", target); status.setText("Exported " + target.toAbsolutePath());
+                    JOptionPane.showMessageDialog(frame, report.description(), "WebScriptLog export", JOptionPane.INFORMATION_MESSAGE);
+                } catch (Exception exception) { showError(frame, exception); }
+            }
+        }.execute();
     }
 
     private enum AnalysisKind { GENERAL, SUMMARY, SNOTATION, WORD_PAUSES, LINEAR, PAUSE }
@@ -452,10 +503,11 @@ class TabbedApplication {
     }
 
     private void showImportReport(ReplayLog log) {
-        Object value = log.metadata.get("inputlogImportReport");
+        boolean web = log.metadata.containsKey("webScriptLogImportReport");
+        Object value = log.metadata.get(web ? "webScriptLogImportReport" : "inputlogImportReport");
         if (!(value instanceof Map)) return;
         Map<?, ?> report = (Map<?, ?>) value;
-        StringBuilder message = new StringBuilder("Imported Inputlog IDFX.\n\n");
+        StringBuilder message = new StringBuilder(web ? "Imported WebScriptLog.\n\n" : "Imported Inputlog IDFX.\n\n");
         for (String section : java.util.List.of("inferredEdits", "warnings")) {
             Object items = report.get(section);
             if (items instanceof java.util.List) for (Object item : (java.util.List<?>) items) {
@@ -465,7 +517,7 @@ class TabbedApplication {
         JTextArea details = new JTextArea(message.toString(), 16, 65);
         details.setEditable(false); details.setLineWrap(true); details.setWrapStyleWord(true);
         details.setCaretPosition(0);
-        JOptionPane.showMessageDialog(frame, new JScrollPane(details), "Inputlog import report", JOptionPane.INFORMATION_MESSAGE);
+        JOptionPane.showMessageDialog(frame, new JScrollPane(details), web ? "WebScriptLog import report" : "Inputlog import report", JOptionPane.INFORMATION_MESSAGE);
     }
 
     private static LogFormat primaryFormat(java.util.Set<LogFormat> formats) {
@@ -507,6 +559,7 @@ class TabbedApplication {
             final Path target = path;
             document.filter.session.setFormats(selectedFormats);
             document.filter.session.setIdfxExtensions(directories.idfxExtensions());
+            document.filter.session.setEditDialect(directories.editDialect());
             SaveSnapshot snapshot = document.filter.session.snapshot();
             document.saving = true;
             status.setText("Saving " + target.toAbsolutePath() + "…");

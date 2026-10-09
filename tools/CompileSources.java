@@ -33,6 +33,9 @@ public final class CompileSources {
         if (args.length == 1 && args[0].equals("--tests")) {
             options.add("src/test/java/se/lu/scriptloglite/ScriptLogLiteChecks.java");
             options.add("src/test/java/se/lu/scriptloglite/InputlogChecks.java");
+            options.add("src/test/java/se/lu/scriptloglite/WebScriptLogChecks.java");
+            options.add("src/test/java/se/lu/scriptloglite/WebScriptLogExportChecks.java");
+            options.add("src/test/java/se/lu/scriptloglite/EditDialectChecks.java");
             options.add("src/test/java/se/lu/scriptloglite/AnalysisTestSupport.java");
             options.add("src/test/java/se/lu/scriptloglite/inputlog/GeneralAnalysisChecks.java");
             options.add("src/test/java/se/lu/scriptloglite/inputlog/SummaryAnalysisChecks.java");

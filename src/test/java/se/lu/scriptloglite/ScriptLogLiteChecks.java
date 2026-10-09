@@ -123,6 +123,9 @@ public final class ScriptLogLiteChecks {
         testReplayControls();
         testRawFormat();
         InputlogChecks.run();
+        WebScriptLogChecks.run();
+        WebScriptLogExportChecks.run();
+        EditDialectChecks.run();
         GeneralAnalysisChecks.run();
         SummaryAnalysisChecks.run();
         RevisionAnalysisChecks.run();
