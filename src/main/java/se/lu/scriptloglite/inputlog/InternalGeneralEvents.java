@@ -31,36 +31,9 @@ final class InternalGeneralEvents {
     }
     static List<GeneralAnalysis.Source> build(ReplayLog log) {
         Map<Integer, Integer> releases = KeyPairs.pair(log.events);
-        Map<Integer, Integer> owners = new HashMap<>();
+        Map<Integer, Integer> owners = linkEdits(log);
         Map<Integer, EditEvent> actions = new HashMap<>();
-        int candidate = -1;
-        Set<Integer> associationHeld = new HashSet<>();
-        Map<Integer, Integer> modifiersAtPress = new HashMap<>();
-        for (int i = 1; i < log.events.size(); i++) {
-            LogEvent event = log.events.get(i);
-            if (event instanceof KeyLogEvent) {
-                KeyLogEvent key = (KeyLogEvent) event;
-                if (key.type == EventType.KEY_PRESSED) { candidate = i; associationHeld.add(key.keyCode); modifiersAtPress.put(i, key.modifiers == null ? inferredModifiers(associationHeld) : key.modifiers); }
-                else associationHeld.remove(key.keyCode);
-            } else if (event instanceof EditEvent && candidate >= 0) {
-                KeyLogEvent key = (KeyLogEvent) log.events.get(candidate);
-                EditEvent edit = (EditEvent) event;
-                // Only join immediate ordinary typing/backspace; selections, paste and
-                // replacements remain separate edit rows. No character times are invented.
-                int modifiers = modifiersAtPress.get(candidate);
-                boolean character = edit.removed.isEmpty() && edit.replacement().length() == 1
-                        && key.keyCode != KeyEvent.VK_BACK_SPACE && textKey(key) && !isModifier(key.keyCode)
-                        && !List.of(KeyEvent.VK_UP, KeyEvent.VK_DOWN, KeyEvent.VK_LEFT, KeyEvent.VK_RIGHT).contains(key.keyCode);
-                String observed = key.keyCode == KeyEvent.VK_ENTER ? "\n" : key.keyChar;
-                if (character && observed != null && !observed.equals("undefined") && !observed.equals(edit.replacement())) character = false;
-                boolean back = key.keyCode == KeyEvent.VK_BACK_SPACE && edit.removed.length() == 1 && edit.replacement().isEmpty();
-                if ((character || back) && (modifiers & (InputEvent.CTRL_DOWN_MASK | InputEvent.ALT_DOWN_MASK | InputEvent.META_DOWN_MASK)) == 0
-                        && Duration.between(key.time, edit.time).toMillis() <= 100) {
-                    owners.put(i, candidate); actions.put(candidate, edit);
-                }
-                candidate = -1;
-            }
-        }
+        for (Map.Entry<Integer, Integer> owner : owners.entrySet()) actions.put(owner.getValue(), (EditEvent) log.events.get(owner.getKey()));
         List<Item> timeline = new ArrayList<>();
         for (int i = 0; i < log.events.size(); i++) timeline.add(new Item(i, millis(log, log.events.get(i))));
         Object meta = log.metadata.get("inputlogMeta");
@@ -142,6 +115,38 @@ final class InternalGeneralEvents {
             source.id = Integer.toString(result.size()); result.add(source);
         }
         return result;
+    }
+    static Map<Integer, Integer> linkEdits(ReplayLog log) {
+        Map<Integer, Integer> owners = new HashMap<>();
+        int candidate = -1;
+        Set<Integer> associationHeld = new HashSet<>();
+        Map<Integer, Integer> modifiersAtPress = new HashMap<>();
+        for (int i = 1; i < log.events.size(); i++) {
+            LogEvent event = log.events.get(i);
+            if (event instanceof KeyLogEvent) {
+                KeyLogEvent key = (KeyLogEvent) event;
+                if (key.type == EventType.KEY_PRESSED) { candidate = i; associationHeld.add(key.keyCode); modifiersAtPress.put(i, key.modifiers == null ? inferredModifiers(associationHeld) : key.modifiers); }
+                else associationHeld.remove(key.keyCode);
+            } else if (event instanceof EditEvent && candidate >= 0) {
+                KeyLogEvent key = (KeyLogEvent) log.events.get(candidate);
+                EditEvent edit = (EditEvent) event;
+                // Only join immediate ordinary typing/backspace; selections, paste and
+                // replacements remain separate edit rows. No character times are invented.
+                int modifiers = modifiersAtPress.get(candidate);
+                boolean character = edit.removed.isEmpty() && edit.replacement().length() == 1
+                        && key.keyCode != KeyEvent.VK_BACK_SPACE && textKey(key) && !isModifier(key.keyCode)
+                        && !List.of(KeyEvent.VK_UP, KeyEvent.VK_DOWN, KeyEvent.VK_LEFT, KeyEvent.VK_RIGHT).contains(key.keyCode);
+                String observed = key.keyCode == KeyEvent.VK_ENTER ? "\n" : key.keyChar;
+                if (character && observed != null && !observed.equals("undefined") && !observed.equals(edit.replacement())) character = false;
+                boolean back = key.keyCode == KeyEvent.VK_BACK_SPACE && edit.removed.length() == 1 && edit.replacement().isEmpty();
+                if ((character || back) && (modifiers & (InputEvent.CTRL_DOWN_MASK | InputEvent.ALT_DOWN_MASK | InputEvent.META_DOWN_MASK)) == 0
+                        && Duration.between(key.time, edit.time).toMillis() <= 100) {
+                    owners.put(i, candidate);
+                }
+                candidate = -1;
+            }
+        }
+        return owners;
     }
     private static long millis(ReplayLog log, LogEvent event) { return Duration.between(log.events.get(0).time, event.time).toMillis() + 1; }
     private static boolean textKey(KeyLogEvent key) {

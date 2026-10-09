@@ -4,6 +4,8 @@ import se.lu.scriptloglite.inputlog.GeneralAnalysis;
 import se.lu.scriptloglite.inputlog.GeneralAnalysisPanel;
 import se.lu.scriptloglite.inputlog.SummaryAnalysis;
 import se.lu.scriptloglite.inputlog.SummaryAnalysisPanel;
+import se.lu.scriptloglite.inputlog.WordPausesAnalysis;
+import se.lu.scriptloglite.inputlog.RevisionAnalysisPanel;
 
 import java.awt.Point;
 import java.awt.Dimension;
@@ -166,6 +168,8 @@ class TabbedApplication {
         JMenu analysisMenu = menu("Analysis", KeyEvent.VK_A);
         item(analysisMenu, "General Analysis…", 0, false, this::generalAnalysis);
         item(analysisMenu, "Summary Analysis (PT0)…", 0, false, this::summaryAnalysis);
+        item(analysisMenu, "S-Notation…", 0, false, () -> analyze(AnalysisKind.SNOTATION));
+        item(analysisMenu, "Word Pauses…", 0, false, () -> analyze(AnalysisKind.WORD_PAUSES));
         JMenu help = menu("Help", KeyEvent.VK_H);
         item(help, "About", 0, false, () -> JOptionPane.showMessageDialog(frame,
                 "ScriptLogLite\nEach document has its own JSON edit history.\n"
@@ -303,14 +307,16 @@ class TabbedApplication {
     }
 
     void generalAnalysis() {
-        analyze(false);
+        analyze(AnalysisKind.GENERAL);
     }
 
     void summaryAnalysis() {
-        analyze(true);
+        analyze(AnalysisKind.SUMMARY);
     }
 
-    private void analyze(boolean summary) {
+    private enum AnalysisKind { GENERAL, SUMMARY, SNOTATION, WORD_PAUSES }
+
+    private void analyze(AnalysisKind kind) {
         java.awt.Component selected = tabs.getSelectedComponent();
         final ReplayLog source;
         final String title;
@@ -322,7 +328,18 @@ class TabbedApplication {
                 source = replays.get(selected).log; title = tabs.getTitleAt(tabs.getSelectedIndex());
             } else { JOptionPane.showMessageDialog(frame, "Select a document or replay tab first."); return; }
         } catch (Exception exception) { showError(frame, exception); return; }
-        if (summary) {
+        if (kind == AnalysisKind.SNOTATION || kind == AnalysisKind.WORD_PAUSES) {
+            boolean words = kind == AnalysisKind.WORD_PAUSES;
+            new javax.swing.SwingWorker<WordPausesAnalysis, Void>() {
+                protected WordPausesAnalysis doInBackground() { return WordPausesAnalysis.analyze(source); }
+                protected void done() {
+                    try { addTab(new RevisionAnalysisPanel(get(), title, words, directories), (words ? "Word Pauses — " : "S-Notation — ") + title); }
+                    catch (Exception exception) { showError(frame, exception); }
+                }
+            }.execute();
+            return;
+        }
+        if (kind == AnalysisKind.SUMMARY) {
             new javax.swing.SwingWorker<SummaryAnalysis, Void>() {
                 protected SummaryAnalysis doInBackground() { return SummaryAnalysis.analyze(source); }
                 protected void done() {

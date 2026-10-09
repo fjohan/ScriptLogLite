@@ -69,6 +69,15 @@ final class InputlogChecks {
         ReplayLog enter = InputlogImporter.load(file(key(0, 1, "VK_RETURN", "NEWLINE", true, 110, 0)
                 + key(1, 2, "VK_BACK", "&#x8;", true, 120, 130)));
         check(enter.finalText.isEmpty(), "Enter/backspace one Word unit");
+        String outsideKey = "<event type='keyboard' id='outside'><part type='winlog'><startTime>110</startTime><endTime>115</endTime>"
+                + "<key>VK_T</key><value>t</value><keyboardstate/></part></event>";
+        String externalFocus = "<event type='focus' id='focus'><part type='winlog'><startTime>105</startTime><endTime>105</endTime><title>Browser</title></part></event>";
+        ReplayLog external = InputlogImporter.load(file(outsideKey + externalFocus + key(0, 1, "VK_A", "a", true, 120, 130)));
+        check(external.finalText.equals("a") && external.events.stream().filter(e -> e instanceof KeyLogEvent && e.type == EventType.KEY_PRESSED).count() == 1,
+                "timestamped external keyboard activity is retained without creating document keys or edits");
+        check(((List<?>) external.metadata.get("inputlogAncillaryEvents")).size() == 2, "external key and focus provenance retained");
+        rejects(file(outsideKey), "missing coordinates without external focus");
+        rejects(file(outsideKey + externalFocus.replace("Browser", "WordLog MainDoc")), "missing coordinates within main document");
         rejects(file(key(0, 4, "VK_A", "a", true, 110, 120)), "pre-existing content");
         rejects(file("<event type='unknown' id='9'/>"), "unsupported source event");
         rejects(file(key + "<event type='insert' id='3'><part type='wordlog'><position>99</position>"

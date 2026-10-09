@@ -35,12 +35,14 @@ final class InputlogImporter {
     private final long clock;
     private Instant causalTime;
     private long lastClock;
-    private int dot, mark, missingReleases;
+    private int dot, mark, missingReleases, externalKeys;
+    private final String mainDocument;
     private String lastKey = "";
     private boolean lastControl;
 
     private InputlogImporter(Element root) {
         Map<String, Object> meta = entries(child(root, "meta"));
+        mainDocument = meta.getOrDefault("__MainDocument", "").toString().toLowerCase(java.util.Locale.ROOT);
         exportedHeader = exportedHeader(meta);
         epoch = exportedHeader.containsKey("recordingStartTime") ? Instant.parse(exportedHeader.get("recordingStartTime").toString())
                 : Instant.ofEpochMilli(Long.parseLong(required(meta, "__LogCreationTimeStamp")));
@@ -125,6 +127,7 @@ final class InputlogImporter {
         warnings.add("Mouse/focus/statistics are retained as source metadata, not replayed; screen coordinates cannot establish document scrolling.");
         if (exportedHeader.isEmpty()) warnings.add("This file supplies no font, line spacing or editor geometry; replay uses ScriptLogLite defaults.");
         if (missingReleases > 0) warnings.add(missingReleases + " keyboard events have no usable release time; no release was invented.");
+        if (externalKeys > 0) warnings.add(externalKeys + " keyboard events without Word coordinates occurred outside the main document, confirmed by timestamped focus records; retained as ancillary source activity, not document edits.");
         Map<String, Object> report = new LinkedHashMap<>();
         report.put("sourceEventCounts", counts);
         report.put("inferredEdits", inferred);
@@ -149,7 +152,11 @@ final class InputlogImporter {
 
     private void keyboard(Element event, Element win, long start, long end) {
         Element word = part(event, "wordlog");
-        if (word == null) throw new IllegalArgumentException("keyboard event lacks Word coordinates");
+        if (word == null) {
+            if (start <= 0 || !outsideDocument(start)) throw new IllegalArgumentException("keyboard event lacks Word coordinates without confirmed external focus");
+            ancillary.add(sourceEvent(event)); externalKeys++; lastKey = ""; lastControl = false;
+            return;
+        }
         int position = integer(word, "position"), length = integer(word, "documentLength");
         if (length != text.length() + 1) throw new IllegalArgumentException("documentLength " + length
                 + " disagrees with reconstructed Word length " + (text.length() + 1)
@@ -196,6 +203,16 @@ final class InputlogImporter {
         }
         lastKey = key;
         lastControl = (modifiers & InputEvent.CTRL_DOWN_MASK) != 0;
+    }
+
+    private boolean outsideDocument(long start) {
+        String title = null; long latest = Long.MIN_VALUE;
+        // Focus notifications can appear after the keys they describe in source order.
+        for (Element event : source) if (event.getAttribute("type").equals("focus")) {
+            Element win = part(event, "winlog"); long time = optionalLong(win, "startTime", 0);
+            if (time > 0 && time <= start && time >= latest) { latest = time; title = field(win, "title").toLowerCase(java.util.Locale.ROOT); }
+        }
+        return title != null && !title.isEmpty() && !title.equals(mainDocument) && !title.contains("wordlog") && !title.contains("maindoc");
     }
 
     private void selection(Element word) {
@@ -249,7 +266,7 @@ final class InputlogImporter {
         for (int i = index + 1; i < source.size(); i++) {
             Element event = source.get(i);
             String type = event.getAttribute("type");
-            if (type.equals("keyboard")) return integer(part(event, "wordlog"), "documentLength") - 1;
+            if (type.equals("keyboard") && part(event, "wordlog") != null) return integer(part(event, "wordlog"), "documentLength") - 1;
             if (type.equals("insert") || type.equals("replacement")) break;
         }
         return -1;

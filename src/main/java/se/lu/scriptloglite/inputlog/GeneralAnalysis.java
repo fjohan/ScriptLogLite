@@ -242,6 +242,10 @@ public final class GeneralAnalysis {
             releases.add(release.keyText + ":" + Duration.between(log.events.get(0).time, release.time).toMillis());
         }
         for (Source source : sources) if (source.type.equals("keyboard")) {
+            if (source.word.isEmpty() && source.index == null) {
+                notes.add("Source event " + source.id + ": external keyboard activity has no Word coordinates; excluded from document conversion checks.");
+                continue;
+            }
             if (source.index == null || source.index < 1 || source.index >= log.events.size()
                     || !(log.events.get(source.index) instanceof KeyLogEvent)) {
                 audit.add("Source event " + source.id + ": converted key link is missing or invalid."); continue;

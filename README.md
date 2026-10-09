@@ -35,7 +35,7 @@ The menus provide:
 - **View**: Replay Current Log, Open Log for Replay, and Nimbus/Light/Dark themes.
 - **Tabs**: Next Tab, Previous Tab, Close All, and a list of open tabs.
 - **Settings**: JSON/Raw/Inputlog IDFX save formats.
-- **Analysis**: General Analysis event table and Summary Analysis (PT0), with Inputlog HTML comparison and HTML export.
+- **Analysis**: General Analysis, Summary Analysis (PT0), S-Notation and Word Pauses, with Inputlog HTML comparison and HTML export.
 - **Help**: About.
 
 Common commands have Ctrl keyboard shortcuts, including Ctrl+N, Ctrl+O, Ctrl+S,
@@ -283,7 +283,7 @@ in `se.lu.scriptloglite`; Inputlog-compatible analyses live in
 | JSON and saving | `JsonLogCodec`, `RawLogCodec`, `LogFormat`, `Json`, `SaveSnapshot`, `BackgroundSaver` |
 | Directories and identifiers | `RecordingPaths`, `RecordingVariables`, `DirectoryHistory` |
 | IDFX conversion (`se.lu.scriptloglite`) | `InputlogImporter`, `InputlogExporter` |
-| Analyses (`se.lu.scriptloglite.inputlog`) | `GeneralAnalysis`, `SummaryAnalysis`, their report/panel classes, `InternalGeneralEvents` |
+| Analyses (`se.lu.scriptloglite.inputlog`) | `GeneralAnalysis`, `SummaryAnalysis`, `SNotationAnalysis`, `WordPausesAnalysis`, `RevisionHistory`, report/panel classes, `InternalGeneralEvents` |
 
 `RecordingSession` owns event history, metadata, revisions, and snapshots.
 History and metadata are private, with immutable copies provided to readers.
@@ -348,7 +348,7 @@ java -jar target/scriptloglite-1.0-SNAPSHOT.jar
 ```
 
 Keep `target/lib` alongside the JAR: its manifest references FlatLaf there.
-The application JAR accepts `--open`, `--replay`, `--export-idfx`, `--general-analysis`, `--summary-analysis`, and `--demo`; the regression
+The application JAR accepts `--open`, `--replay`, `--export-idfx`, `--general-analysis`, `--summary-analysis`, `--s-notation`, `--word-pauses`, and `--demo`; the regression
 suite is separate and runs with `mvn test` or `./run.sh --self-test`.
 
 Checks cover editing, Unicode/escaping, forward/backward replay, timing/speeds,
@@ -613,3 +613,112 @@ Regression checks compare every reference metric, verify identical results after
 JSON/raw round trips, remove/poison source keyboard/edit provenance, exercise native
 continuation, synthetic typing/sentence/paragraph boundaries and programmatic edits,
 check comparison error handling, and construct the Summary tab headlessly.
+
+## S-Notation and Word Pauses
+
+Select a recording or replay tab and choose **Analysis → S-Notation…** or
+**Analysis → Word Pauses…**. The report tab can switch between these two views,
+compare an Inputlog SN/WP HTML report, and save standalone HTML. Calculation and
+file operations run in background workers. Both analyses use internal typed
+events and reversible edits, so IDFX, JSON and raw files work directly.
+
+`SNotationAnalysis` builds a `RevisionHistory` of live character identities,
+deletion tombstones and revision breaks. `WordPausesAnalysis` uses that same
+structured history. Notation is rendered for display; neither reconstruction nor
+word timing parses the notation string. Every removed span is checked against
+live characters, and the final projection must equal the replay's final text.
+Literal brackets, braces, pipes, backslashes and middle dots cannot affect the
+projection. Consecutive backspaces form one revision; normal continued typing is
+unmarked; displaced typing and bulk insertions use braces. Replacement insertion
+and deletion share an ID. Later edits can split an insertion into labelled
+fragments. This is an S-Notation-style revision representation with local grouping
+and numbering conventions, not a byte-for-byte reproduction of Inputlog markup.
+
+For `JF_96.idfx`, the imported and analysed text is exactly
+`one two three four five six`, with six tokens. The selected `three `, including
+its trailing space, is removed once and inserted once. There are two revision
+groups, rather than Inputlog's phantom replacement with `s`. For `JF_92.idfx`,
+`KJELL HÖGLUND` appears only at the new location at the top; the leftover title at
+the old location in Inputlog's report does not appear. The final 209 UTF-16 units
+and 36 non-whitespace tokens come from replay.
+
+When a Ctrl+X deletion is followed by a Ctrl+V insertion containing exactly the
+same text, the history preserves original character timing through an **inferred
+clipboard lineage**. Original typing time and later placement time are separate.
+Repeated pastes preserve lineage without mutating the original deletion record;
+an observed Ctrl+C invalidates the previous cut candidate. Menu/externally modified
+clipboard contents cannot be established from a keystroke log. Unlinked paste and
+other bulk edits have observed placement times and unavailable typing times.
+
+The Word Pauses table contains the familiar Inputlog column labels, followed by
+final text coordinates, placement times, provenance and timing status. Definitions
+are explicit in every report:
+
+- One row per final non-whitespace token, including attached punctuation. `#Chars`
+  is its UTF-16 length; final positions use an exclusive end.
+- Start/End WordID identify internal key-event indices, not Inputlog IDs.
+- Start WordTime is the earliest surviving original character press; End WordTime
+  is the latest release. Word Prod spans these observations when every character
+  has complete typing timing. Deleted attempts remain in the revision ledger and
+  notation, and are not silently folded into surviving-character timing.
+- Within Word sums start-to-start intervals in final character order; it is zero
+  for a one-character token and unavailable if that order reverses in time.
+- BfrWord-2 is the preceding token's AfterWord gap when the words remain
+  chronological. BfrWord-1 is the first press minus preceding whitespace press.
+  Btwn Word is the first press minus preceding last-character press. AftWord+1
+  is the following whitespace press minus the last-character press.
+- Unknown or negative intervals display `-`. Zero is valid for a press at the
+  analysis origin. Before-word fields of the first token are zero by convention.
+  No fake final return, per-character paste keystrokes, absolute-clock values or
+  negative-duration corrections are introduced to fill missing data.
+
+These corrected, documented definitions intentionally differ from Inputlog's
+special handling of initial/trailing deletions, one-letter tokens and missing
+boundaries. Target-list matching is not implemented; its column stays empty.
+The report therefore does not claim full timing equivalence with Inputlog.
+
+```sh
+./run.sh --word-pauses JF_96.idfx JF_96_sll_WP.html \
+  --compare JF_20261009_96_WP.html
+./run.sh --s-notation JF_96.idfx JF_96_sll_SN.html \
+  --compare JF_20261009_96_SN.html
+./run.sh --word-pauses JF_92.idfx JF_92_sll_WP.html \
+  --compare JF_20261008_92_WP.html
+./run.sh --s-notation JF_92.idfx JF_92_sll_SN.html
+./run.sh --word-pauses exp_subj_json_1.json /tmp/native-WP.html
+./run.sh --s-notation exp_subj_raw_1.txt /tmp/native-SN.html
+```
+
+Reference comparison reads only the supplied report. It compares reconstruction
+after whitespace normalization, matches repeated token spellings by occurrence
+in final order, and lists differences for token lengths and eight timing columns.
+Notation numbering, revision labels, IDs and target fields are excluded. Inputlog
+SN-only references have no word table; the projection of their markup is a
+diagnostic comparison only, never an input to calculation. Both supplied WP
+reports and the JF_96 SN report expose differing reconstruction. The checks do
+not force agreement with those known incorrect results.
+
+Regression checks cover both IDFX sessions, the original keyboard document-length
+audit, JSON/raw persistence, native selections and moves, repeat paste, clipboard
+invalidation, nested deletions, literal markup, missing releases, bulk edits,
+preexisting text, 240 randomized insertion/deletion/replacement sequences and a
+headless report tab. Inputlog's C# code and the supplied reports are unchanged.
+
+`JF_97.idfx` adds a linear-writing regression with backspaces and a late deletion
+of an early typo. Its reconstructed text agrees with `JF_20261009_97_WP.html`
+after whitespace normalization, and all **66 final words** match. There are 23
+revision groups; the last removes `w` at offset 61 from the earlier `Princetown.`.
+All **445 document keyboard records** pass the independent conversion audit.
+The session also includes **21 coordinate-less keyboard events outside Word**.
+The importer confirms external focus using timestamps (focus notifications may
+appear later in source order) and retains these keys as ancillary provenance,
+without adding them to the document or inventing Word coordinates. Missing
+coordinates without confirmed external focus still cause an import error.
+
+The JF_97 WP comparison has **510 equal and 84 different** count/timing cells.
+Inputlog additionally produces five standalone punctuation rows and an empty
+boundary row. Differences remain explicit: punctuation grouping, whitespace
+boundary handling, initial deleted attempts and one-letter timing conventions
+do not have identical definitions in these two implementations. JSON/raw round
+trips preserve the results and external activity. This fixture validates the
+reconstruction without claiming full Inputlog timing equivalence.

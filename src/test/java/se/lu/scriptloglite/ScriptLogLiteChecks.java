@@ -2,6 +2,7 @@ package se.lu.scriptloglite;
 
 import se.lu.scriptloglite.inputlog.GeneralAnalysisChecks;
 import se.lu.scriptloglite.inputlog.SummaryAnalysisChecks;
+import se.lu.scriptloglite.inputlog.RevisionAnalysisChecks;
 
 import java.awt.Point;
 import java.awt.Dimension;
@@ -122,6 +123,7 @@ public final class ScriptLogLiteChecks {
         InputlogChecks.run();
         GeneralAnalysisChecks.run();
         SummaryAnalysisChecks.run();
+        RevisionAnalysisChecks.run();
         testThemes();
         System.out.println("Replay self-test passed");
     }

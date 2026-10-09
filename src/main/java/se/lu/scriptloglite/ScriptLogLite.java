@@ -4,6 +4,8 @@ import se.lu.scriptloglite.inputlog.GeneralAnalysis;
 import se.lu.scriptloglite.inputlog.GeneralAnalysisReport;
 import se.lu.scriptloglite.inputlog.SummaryAnalysis;
 import se.lu.scriptloglite.inputlog.SummaryAnalysisReport;
+import se.lu.scriptloglite.inputlog.WordPausesAnalysis;
+import se.lu.scriptloglite.inputlog.RevisionAnalysisReport;
 
 import java.nio.file.Path;
 import javax.swing.JTextArea;
@@ -20,20 +22,26 @@ public final class ScriptLogLite {
         if (!java.awt.GraphicsEnvironment.isHeadless()) {
             installTheme(Theme.NIMBUS);
         }
-        if (args.length > 0 && (args[0].equals("--general-analysis") || args[0].equals("--summary-analysis"))) {
-            if (args.length < 3) throw new IllegalArgumentException("Usage: " + args[0] + " INPUT_LOG OUTPUT_HTML [--source-events] [--compare INPUTLOG_HTML]");
+        if (args.length > 0 && java.util.List.of("--general-analysis", "--summary-analysis", "--s-notation", "--word-pauses").contains(args[0])) {
+            boolean revisions = args[0].equals("--s-notation") || args[0].equals("--word-pauses");
+            if (args.length < 3) throw new IllegalArgumentException("Usage: " + args[0] + " INPUT_LOG OUTPUT_HTML " + (revisions ? "" : "[--source-events] ") + "[--compare INPUTLOG_HTML]");
             boolean sourceMode = false; Path reference = null;
             for (int i = 3; i < args.length; i++) {
                 if (args[i].equals("--source-events")) sourceMode = true;
                 else if (args[i].equals("--compare") && i + 1 < args.length) reference = Path.of(args[++i]);
                 else throw new IllegalArgumentException("Unknown or incomplete analysis option: " + args[i]);
             }
+            if (revisions && sourceMode) throw new IllegalArgumentException("S-Notation and Word Pauses use internal edits; --source-events is not supported.");
             Path input = Path.of(args[1]), output = Path.of(args[2]);
             if (input.toAbsolutePath().normalize().equals(output.toAbsolutePath().normalize())
                     || reference != null && reference.toAbsolutePath().normalize().equals(output.toAbsolutePath().normalize())) {
                 throw new IllegalArgumentException("Choose output separate from input/reference");
             }
             ReplayLog history = ReplayLog.load(input, -1);
+            if (revisions) {
+                RevisionAnalysisReport.save(WordPausesAnalysis.analyze(history), input.getFileName().toString(), output, reference, args[0].equals("--word-pauses"));
+                return;
+            }
             if (args[0].equals("--summary-analysis")) {
                 SummaryAnalysis analysis = sourceMode ? SummaryAnalysis.analyzeSource(history) : SummaryAnalysis.analyze(history);
                 SummaryAnalysisReport.save(analysis, input.getFileName().toString(), output, reference);
