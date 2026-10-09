@@ -8,7 +8,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -42,14 +41,10 @@ final class InputlogExporter {
         header = JsonLogCodec.header(events, metadata);
         start = events.get(0).time;
         xml = XMLOutputFactory.newFactory().createXMLStreamWriter(writer);
-        Map<Integer, ArrayDeque<Integer>> pending = new HashMap<>();
-        for (int i = 1; i < events.size(); i++) if (events.get(i) instanceof KeyLogEvent) {
-            KeyLogEvent key = (KeyLogEvent) events.get(i);
-            ArrayDeque<Integer> queue = pending.computeIfAbsent(key.keyCode, ignored -> new ArrayDeque<>());
-            if (key.type == EventType.KEY_PRESSED) queue.add(i);
-            else if (!queue.isEmpty()) releases.put(queue.remove(), i);
-            else orphanReleases++;
-        }
+        releases.putAll(KeyPairs.pair(events));
+        int releaseCount = 0;
+        for (LogEvent event : events) if (event instanceof KeyLogEvent && event.type == EventType.KEY_RELEASED) releaseCount++;
+        orphanReleases = releaseCount - releases.size();
     }
     static void write(List<LogEvent> events, Map<String, Object> metadata, Writer writer) throws IOException {
         write(events, metadata, writer, true);
@@ -85,7 +80,7 @@ final class InputlogExporter {
             notes.add("Missing key characters/modifiers are inferred from nearby edits and held modifier keys where possible.");
             notes.add("No Word document, page layout or screen mouse coordinates exist. Scroll offsets are retained only in labels.");
             notes.add("Initial text, when present, is a synthetic insertion at session start. Statistics are approximate text counts.");
-            notes.add("Keys are paired in order per Java key code; missing releases use endTime=0. Unpaired releases omitted: " + orphanReleases + ".");
+            notes.add("Keys use stroke IDs when present; otherwise the latest matching code/location press; missing releases use endTime=0. Unpaired releases omitted: " + orphanReleases + ".");
             entry("__ScriptLogLiteExportReport", Json.stringify(notes, 0));
         }
         xml.writeCharacters("\n  "); xml.writeEndElement();

@@ -35,6 +35,7 @@ The menus provide:
 - **View**: Replay Current Log, Open Log for Replay, and Nimbus/Light/Dark themes.
 - **Tabs**: Next Tab, Previous Tab, Close All, and a list of open tabs.
 - **Settings**: JSON/Raw/Inputlog IDFX save formats.
+- **Analysis**: General Analysis event table and Summary Analysis (PT0), with Inputlog HTML comparison and HTML export.
 - **Help**: About.
 
 Common commands have Ctrl keyboard shortcuts, including Ctrl+N, Ctrl+O, Ctrl+S,
@@ -334,7 +335,7 @@ java -jar target/scriptloglite-1.0-SNAPSHOT.jar
 ```
 
 Keep `target/lib` alongside the JAR: its manifest references FlatLaf there.
-The application JAR accepts `--open`, `--replay`, `--export-idfx`, and `--demo`; the regression
+The application JAR accepts `--open`, `--replay`, `--export-idfx`, `--general-analysis`, `--summary-analysis`, and `--demo`; the regression
 suite is separate and runs with `mvn test` or `./run.sh --self-test`.
 
 Checks cover editing, Unicode/escaping, forward/backward replay, timing/speeds,
@@ -457,3 +458,145 @@ The command-line equivalent is:
 ```sh
 ./run.sh --export-idfx exp_subj_json_1.json output.idfx --no-lite-labels
 ```
+
+
+## General Analysis and conversion validation
+
+Open any IDFX, JSON or raw log (or select a recording/replay tab), then choose
+**Analysis → General Analysis…**. The default is **Internal events / reconstructed
+text**. The table is calculated from typed ScriptLogLite events and replayed text;
+it does **not** export/reimport IDFX or read retained source keyboard/edit payloads
+for calculation. Positions, document lengths and cumulative character production
+come from the actual edits. Matching nearby typing/backspace edits are combined
+with their key press; paste, replacements and other edits have their own rows.
+Viewport changes appear as `scrollChange` rows, with viewport X/Y offsets.
+
+The mode selector also offers **Retained Inputlog source events**, preserving the
+previous calculation for comparison with Inputlog conventions. It requires
+source provenance and describes the imported session only. For a continued log,
+it explicitly excludes the later native events; internal mode includes them. **Compare Inputlog HTML…** lists every difference, and **Save HTML
+report…** saves the table and comparison. These operations run in background workers.
+
+Command-line examples (without starting the GUI):
+
+```sh
+./run.sh --general-analysis JF_92.idfx JF_92_sll_internal_GA.html \
+  --compare JF_20261008_92_GA.html
+./run.sh --general-analysis JF_92.idfx JF_92_sll_source_GA.html \
+  --source-events --compare JF_20261008_92_GA.html
+./run.sh --general-analysis exp_subj_json_1.json /tmp/json-GA.html
+./run.sh --general-analysis exp_subj_raw_1.txt /tmp/raw-GA.html
+```
+
+Source mode matches the supplied reference's **331 rows × 20 columns** exactly.
+That establishes compatibility of those source-based calculations, not correctness
+of the imported internal history by itself. In internal mode the same session has
+**330 rows**: 329 match reference rows by type/output/start time, two reference rows
+have no exact counterpart and one generated row is unmatched. The Word no-op
+replacement contributes no internal edit. The cut is represented as the actual
+selected-range deletion `[195:209]`, rather than Word's `[195:196]` newline record.
+Native event IDs, actual reconstructed positions/lengths, edit timestamps and
+production counts can also differ from Inputlog's reported/backfilled values.
+These differences are visible in the comparison; the internal mode does not copy
+source values to obtain an exact match.
+
+Both modes group modifier keys, omit navigation repeats without recorded releases,
+use millisecond timings from the first observed action, and provide one-minute and
+ten-way interval columns. Document lengths/production include a virtual final
+paragraph mark for Inputlog comparison; the live text does not. Source mode also
+reproduces Inputlog's legacy position/document-length backfill. Pause-location
+rules currently cover the supplied session's text/control/paragraph patterns;
+they are not the full configurable Inputlog finite-state machinery.
+
+A separate conversion audit checks retained source records against the internal
+replay: pre-edit document lengths, key values, press/release times and replayable
+edit positions/text. All **335 JF_92 keyboard records** pass. Mouse/focus timing and
+screen coordinates, when available, are included from `inputlogAncillaryEvents`
+because the internal text events do not encode those observations. Source keyboard,
+replacement and insertion records never supply the internal table's text/positions.
+
+Typed key events now have an optional `strokeId`, preserved by JSON/raw saves and
+clock rebasing. IDFX imports retain known press/release associations directly in
+these typed events; new Swing recordings assign IDs as they record keys. This
+prevents missing-release auto-repeat events from stealing later key releases.
+Older files remain readable; without IDs, pairing uses the latest pending press
+with the same code/location and is an inference. A missing release gives a zero
+compatibility action duration, indicating unavailable timing rather than an
+observed instantaneous action. IDFX export uses the same pairing mechanism.
+Reimport the original IDFX to obtain these IDs for an older imported JSON/raw log.
+
+Tests establish that internal results are identical after JSON/raw round trips,
+that the native `exp_subj` JSON/raw samples produce the same table, and that changing
+or removing source keyboard/edit metadata cannot change the internal table. They
+also deliberately alter actual key/edit data and verify that it affects analysis
+or triggers the independent audit. Matching one reference and passing these checks
+is evidence for this session, not proof for every possible IDFX command or analysis.
+The `exp_subj` and `JF_92` sessions remain separate writing sessions.
+
+## Summary Analysis (PT0)
+
+Select a document or replay tab and choose **Analysis → Summary Analysis (PT0)…**.
+The default calculation uses internal typed events and reconstructed text, and
+works with JSON, raw and IDFX logs. The source-mode selector, reference comparison
+and HTML export work like General Analysis. Calculation, comparison and saving
+run in background workers.
+
+The report implements all **31 process-information and process-time metrics** in
+`JF_20261008_92_SU_PT0.html`: typed and inserted/replaced characters, modifier-state
+counts, rates, word/sentence/paragraph means, medians and deviations, and total
+process duration. PT0 means a pause threshold of zero; pause/burst modules for
+other thresholds are not implemented. Nonzero-threshold references are rejected.
+Metadata and additional reconstructed-product measures are displayed separately
+and excluded from reference comparisons. Analysis creation time belongs to the
+new report rather than being copied from the reference.
+
+```sh
+./run.sh --summary-analysis JF_92.idfx JF_92_sll_internal_SU_PT0.html \
+  --compare JF_20261008_92_SU_PT0.html
+./run.sh --summary-analysis JF_92.idfx JF_92_sll_source_SU_PT0.html \
+  --source-events --compare JF_20261008_92_SU_PT0.html
+./run.sh --summary-analysis exp_subj_json_1.json /tmp/json-summary.html
+./run.sh --summary-analysis exp_subj_raw_1.txt /tmp/raw-summary.html
+```
+
+These are **process** measures: deleted typing still counts, and pasted text is
+separate. The reference's “Total Words in Main Document” is a process count of
+completed word units, not the final text's word count. In the supplied session,
+both modes obtain 253 typed characters including whitespace, 206 excluding it,
+40 process words, 7 paragraphs, 14 pasted characters, and 116.812 seconds.
+
+Internal mode matches **28 of 31** metrics. Its actual cut is a deletion, so it
+counts zero replaced characters and 286 total keystrokes/inserted/replaced units,
+versus Inputlog's one replaced paragraph mark and total 287. Source mode preserves
+that convention and matches **30 of 31**. Both modes calculate a words-per-paragraph
+deviation of **2.433**, while Inputlog's supplied report leaves that field blank.
+The process paragraph word counts here are `[6, 5, 10, 8, 4, 5, 2]`. This discrepancy
+is exposed rather than forcing a blank result; it may reflect Inputlog's boundary
+callback ordering or a different analysis build, and is not established as an
+Inputlog bug.
+
+The boundary scanner is an independent implementation with whitespace/word
+punctuation boundaries, returns and focus changes for paragraphs, and terminal
+punctuation followed by whitespace/end or focus changes for sentences. It does
+not implement Inputlog's entire configurable finite-state rule set. Character
+unit categories follow Inputlog-style lexical conventions; total typed counts
+use Unicode letter/number/punctuation and whitespace categories. Compatibility
+means intentionally use the total typed count, while medians use lexical unit
+lengths without whitespace. Deviations use population variance with Inputlog's
+count-greater-than-two and blank-for-zero conventions; paragraph character
+variance retains its legacy total-typed-non-whitespace sum. The supplied fixture
+is read only by the comparison, never during calculation.
+
+Reconstructed-product statistics use replayed text and actual edits: final UTF-16
+length (including LF), non-whitespace length, Unicode word tokens, nonempty
+paragraphs and total inserted/removed UTF-16 units. Word page/line statistics are
+not guessed. Mouse/focus context retained during IDFX import supplies timing and
+main-document focus; its absence in native logs cannot be inferred. Internal mode
+does not use retained source keyboard/edit payloads or Word statistics, and it
+includes native edits made after an imported session; source mode describes only
+the imported prefix.
+
+Regression checks compare every reference metric, verify identical results after
+JSON/raw round trips, remove/poison source keyboard/edit provenance, exercise native
+continuation, synthetic typing/sentence/paragraph boundaries and programmatic edits,
+check comparison error handling, and construct the Summary tab headlessly.

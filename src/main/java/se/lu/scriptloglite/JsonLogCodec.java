@@ -50,6 +50,7 @@ class JsonLogCodec {
                 if (key.modifiers != null) event.put("modifiers", key.modifiers);
                 if (key.modifiersText != null) event.put("modifiersText", key.modifiersText);
                 if (key.keyLocation != null) event.put("keyLocation", key.keyLocation);
+                if (key.strokeId != null) event.put("strokeId", key.strokeId);
             }
             writer.write(i == 1 ? "\n    " : ",\n    ");
             writer.write(Json.stringify(event, 2));
@@ -140,7 +141,7 @@ class JsonLogCodec {
                     case SCROLL: event = new ScrollLogEvent(time, integer(fields, "viewX"), integer(fields, "viewY")); break;
                     default: event = new KeyLogEvent(time, type, integer(fields, "keyCode"), optionalString(fields, "keyText"),
                             optionalString(fields, "keyChar"), optionalInt(fields, "modifiers"), optionalString(fields, "modifiersText"),
-                            optionalInt(fields, "keyLocation"));
+                            optionalInt(fields, "keyLocation"), optionalString(fields, "strokeId"));
                 }
                 events.add(event);
             } catch (RuntimeException exception) {

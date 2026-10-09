@@ -117,6 +117,8 @@ public final class ScriptLogLiteChecks {
         testReplayControls();
         testRawFormat();
         InputlogChecks.run();
+        GeneralAnalysisChecks.run();
+        SummaryAnalysisChecks.run();
         testThemes();
         System.out.println("Replay self-test passed");
     }

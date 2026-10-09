@@ -158,6 +158,9 @@ class TabbedApplication {
             public void menuCanceled(javax.swing.event.MenuEvent event) { }
         });
         rebuildTabsMenu();
+        JMenu analysisMenu = menu("Analysis", KeyEvent.VK_A);
+        item(analysisMenu, "General Analysis…", 0, false, this::generalAnalysis);
+        item(analysisMenu, "Summary Analysis (PT0)…", 0, false, this::summaryAnalysis);
         JMenu help = menu("Help", KeyEvent.VK_H);
         item(help, "About", 0, false, () -> JOptionPane.showMessageDialog(frame,
                 "ScriptLogLite\nEach document has its own JSON edit history.\n"
@@ -292,6 +295,45 @@ class TabbedApplication {
         }
         document.text.requestFocusInWindow();
         return document;
+    }
+
+    void generalAnalysis() {
+        analyze(false);
+    }
+
+    void summaryAnalysis() {
+        analyze(true);
+    }
+
+    private void analyze(boolean summary) {
+        java.awt.Component selected = tabs.getSelectedComponent();
+        final ReplayLog source;
+        final String title;
+        try {
+            if (selected instanceof DocumentTab) {
+                DocumentTab document = (DocumentTab) selected;
+                source = document.filter.session.replay(); title = document.title;
+            } else if (replays.containsKey(selected)) {
+                source = replays.get(selected).log; title = tabs.getTitleAt(tabs.getSelectedIndex());
+            } else { JOptionPane.showMessageDialog(frame, "Select a document or replay tab first."); return; }
+        } catch (Exception exception) { showError(frame, exception); return; }
+        if (summary) {
+            new javax.swing.SwingWorker<SummaryAnalysis, Void>() {
+                protected SummaryAnalysis doInBackground() { return SummaryAnalysis.analyze(source); }
+                protected void done() {
+                    try { addTab(new SummaryAnalysisPanel(get(), title, directories), "Summary Analysis — " + title); }
+                    catch (Exception exception) { showError(frame, exception); }
+                }
+            }.execute();
+            return;
+        }
+        new javax.swing.SwingWorker<GeneralAnalysis, Void>() {
+            protected GeneralAnalysis doInBackground() throws Exception { return GeneralAnalysis.analyze(source); }
+            protected void done() {
+                try { addTab(new GeneralAnalysisPanel(get(), title, directories), "General Analysis — " + title); }
+                catch (Exception exception) { showError(frame, exception); }
+            }
+        }.execute();
     }
 
     void addReplay(ReplayLog replay, String title) {

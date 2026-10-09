@@ -9,6 +9,9 @@ import javax.swing.text.DocumentFilter;
 
 /** Captures Swing edit, caret, and key events for a recording session. */
 public class LoggingFilter extends DocumentFilter {
+    private final String strokePrefix = "sll:" + java.util.UUID.randomUUID() + ":";
+    private long strokeSequence;
+    private final java.util.Map<String, String> activeStrokes = new java.util.HashMap<>();
     final RecordingSession session;
     boolean restoring;
 
@@ -42,10 +45,13 @@ public class LoggingFilter extends DocumentFilter {
         append(new CaretLogEvent(timestamp(), event.getDot(), event.getMark()));
     }
     public void recordKey(String method, KeyEvent event) {
+        String identity = event.getKeyCode() + ":" + event.getKeyLocation();
+        String stroke = method.equals("keyPressed") ? strokePrefix + (++strokeSequence) : activeStrokes.remove(identity);
+        if (method.equals("keyPressed")) activeStrokes.put(identity, stroke);
         append(new KeyLogEvent(timestamp(), EventType.named(method), event.getKeyCode(),
                 KeyEvent.getKeyText(event.getKeyCode()), event.getKeyChar() == KeyEvent.CHAR_UNDEFINED
                 ? "undefined" : String.valueOf(event.getKeyChar()), event.getModifiersEx(),
-                KeyEvent.getModifiersExText(event.getModifiersEx()), event.getKeyLocation()));
+                KeyEvent.getModifiersExText(event.getModifiersEx()), event.getKeyLocation(), stroke));
     }
     static String quote(String text) { return text == null ? "null" : Json.quote(text); }
 }

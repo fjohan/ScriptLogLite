@@ -27,6 +27,8 @@ final class InputlogImporter {
     private final List<String> inferred = new ArrayList<>();
     private final Map<String, Integer> counts = new LinkedHashMap<>();
     private final List<Object> ancillary = new ArrayList<>();
+    private final List<Map<String, Object>> generalEvents = new ArrayList<>();
+    private final Map<Map<String, Object>, LogEvent> generalLinks = new java.util.IdentityHashMap<>();
     private final StringBuilder text = new StringBuilder();
     private final Instant epoch;
     private final Map<String, Object> exportedHeader;
@@ -73,6 +75,9 @@ final class InputlogImporter {
             Element event = source.get(i);
             String type = event.getAttribute("type");
             counts.merge(type, 1, Integer::sum);
+            Map<String, Object> general = sourceEvent(event);
+            generalEvents.add(general);
+            int before = events.size();
             try {
                 Element win = part(event, "winlog");
                 long start = optionalLong(win, "startTime", 0), end = optionalLong(win, "endTime", 0);
@@ -98,6 +103,7 @@ final class InputlogImporter {
                     case "mouse": case "focus": case "statistics": ancillary.add(sourceEvent(event)); break;
                     default: throw new IllegalArgumentException("unsupported event type '" + type + "'");
                 }
+                if (events.size() > before && type.equals("keyboard")) generalLinks.put(general, events.get(before));
             } catch (RuntimeException exception) {
                 throw new IllegalArgumentException("Inputlog event " + event.getAttribute("id") + " (" + type + "): "
                         + exception.getMessage(), exception);
@@ -107,6 +113,12 @@ final class InputlogImporter {
         // the source-order edit/caret sequence, whose times were made causally monotonic.
         events.sort(Comparator.comparing(event -> event.time));
         ReplayLog log = new ReplayLog(events);
+        Map<LogEvent, Integer> indices = new java.util.IdentityHashMap<>();
+        for (int i = 0; i < events.size(); i++) indices.put(events.get(i), i);
+        for (Map<String, Object> item : generalEvents) {
+            LogEvent linked = generalLinks.get(item);
+            if (linked != null) item.put("convertedKeyIndex", indices.get(linked));
+        }
         warnings.add("Word paragraph marks are represented by LF; the mandatory final Word paragraph mark is omitted.");
         if (exportedHeader.isEmpty()) warnings.add("Untimed Word edits/selections use the preceding event time; selection direction is unavailable.");
         else warnings.add("ScriptLogLite header, precise event times, selection direction and viewport were restored from labelled extensions.");
@@ -124,6 +136,8 @@ final class InputlogImporter {
         Map<String, Object> session = entries(child(root, "session"));
         log.metadata.put("inputlogSession", session);
         log.metadata.put("inputlogAncillaryEvents", ancillary);
+        log.metadata.put("inputlogGeneralEvents", generalEvents);
+        log.metadata.put("inputlogGeneralEventCount", events.size());
         log.metadata.put("inputlogImportReport", report);
         log.metadata.put("id_code", session.getOrDefault("Participant", ""));
         log.metadata.put("textLanguage", session.getOrDefault("Text Language", ""));
@@ -152,11 +166,11 @@ final class InputlogImporter {
         int code = keyCode(key);
         // Keep the Windows VK name even when Swing has no matching key code.
         events.add(new KeyLogEvent(exportedHeader.isEmpty() ? time(start) : causalTime, EventType.KEY_PRESSED, code, key, value,
-                modifiers, InputEvent.getModifiersExText(modifiers), location));
+                modifiers, InputEvent.getModifiersExText(modifiers), location, "idfx:" + event.getAttribute("id")));
         Instant releaseTime = !exportedHeader.isEmpty() && label(event, "ScriptLogLite.releaseElapsedNanos") != null
                 ? epoch.plusNanos(Long.parseLong(label(event, "ScriptLogLite.releaseElapsedNanos"))) : time(Math.max(start, end));
         if (end >= start) events.add(new KeyLogEvent(releaseTime, EventType.KEY_RELEASED, code, key, value,
-                modifiers, InputEvent.getModifiersExText(modifiers), location));
+                modifiers, InputEvent.getModifiersExText(modifiers), location, "idfx:" + event.getAttribute("id")));
         else missingReleases++;
         if (dot != position && mark != position) caret(position, position);
         String replay = field(word, "replay");

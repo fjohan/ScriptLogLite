@@ -42,7 +42,7 @@ final class RawLogCodec {
                 KeyLogEvent key = (KeyLogEvent) event; writer.write(" " + key.keyCode);
                 extra(writer, "keyText", key.keyText); extra(writer, "keyChar", key.keyChar);
                 extra(writer, "modifiers", key.modifiers); extra(writer, "modifiersText", key.modifiersText);
-                extra(writer, "keyLocation", key.keyLocation);
+                extra(writer, "keyLocation", key.keyLocation); extra(writer, "strokeId", key.strokeId);
             }
             writer.write('\n');
         }
@@ -169,7 +169,7 @@ final class RawLogCodec {
                             extras.put(parts[j].substring(0, equals), decode(parts[j].substring(equals + 1)));
                         }
                         event = new KeyLogEvent(time, type, Integer.parseInt(parts[3]), extras.get("keyText"), extras.get("keyChar"),
-                                ReplayLog.optionalInteger(extras, "modifiers"), extras.get("modifiersText"), ReplayLog.optionalInteger(extras, "keyLocation")); break;
+                                ReplayLog.optionalInteger(extras, "modifiers"), extras.get("modifiersText"), ReplayLog.optionalInteger(extras, "keyLocation"), extras.get("strokeId")); break;
                     default: throw new IllegalArgumentException("Unexpected event " + type.name);
                 }
                 events.add(event);

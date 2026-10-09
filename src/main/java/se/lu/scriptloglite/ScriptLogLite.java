@@ -15,6 +15,29 @@ public final class ScriptLogLite {
         if (!java.awt.GraphicsEnvironment.isHeadless()) {
             installTheme(Theme.NIMBUS);
         }
+        if (args.length > 0 && (args[0].equals("--general-analysis") || args[0].equals("--summary-analysis"))) {
+            if (args.length < 3) throw new IllegalArgumentException("Usage: " + args[0] + " INPUT_LOG OUTPUT_HTML [--source-events] [--compare INPUTLOG_HTML]");
+            boolean sourceMode = false; Path reference = null;
+            for (int i = 3; i < args.length; i++) {
+                if (args[i].equals("--source-events")) sourceMode = true;
+                else if (args[i].equals("--compare") && i + 1 < args.length) reference = Path.of(args[++i]);
+                else throw new IllegalArgumentException("Unknown or incomplete analysis option: " + args[i]);
+            }
+            Path input = Path.of(args[1]), output = Path.of(args[2]);
+            if (input.toAbsolutePath().normalize().equals(output.toAbsolutePath().normalize())
+                    || reference != null && reference.toAbsolutePath().normalize().equals(output.toAbsolutePath().normalize())) {
+                throw new IllegalArgumentException("Choose output separate from input/reference");
+            }
+            ReplayLog history = ReplayLog.load(input, -1);
+            if (args[0].equals("--summary-analysis")) {
+                SummaryAnalysis analysis = sourceMode ? SummaryAnalysis.analyzeSource(history) : SummaryAnalysis.analyze(history);
+                SummaryAnalysisReport.save(analysis, input.getFileName().toString(), output, reference);
+                return;
+            }
+            GeneralAnalysis analysis = sourceMode ? GeneralAnalysis.analyzeSource(history) : GeneralAnalysis.analyze(history);
+            GeneralAnalysisReport.save(analysis, input.getFileName().toString(), output, reference);
+            return;
+        }
         if (args.length > 0 && args[0].equals("--export-idfx")) {
             if (args.length != 3 && !(args.length == 4 && args[3].equals("--no-lite-labels"))) {
                 throw new IllegalArgumentException("Usage: --export-idfx INPUT_LOG OUTPUT_IDFX [--no-lite-labels]");

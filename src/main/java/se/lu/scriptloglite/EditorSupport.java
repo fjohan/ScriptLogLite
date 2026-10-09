@@ -58,7 +58,7 @@ final class EditorSupport {
         }
     }
 
-    static void showError(JFrame frame, Exception exception) {
+    static void showError(java.awt.Component frame, Exception exception) {
         JOptionPane.showMessageDialog(frame, exception.getMessage(), "Log error",
                 JOptionPane.ERROR_MESSAGE);
     }
