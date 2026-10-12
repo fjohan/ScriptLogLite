@@ -26,6 +26,7 @@ public final class ScriptLogLite {
         if (!java.awt.GraphicsEnvironment.isHeadless()) {
             installTheme(Theme.NIMBUS);
         }
+        if (args.length > 0 && args[0].equals("--convert")) { se.lu.scriptloglite.conversions.ConversionCli.run(args); return; }
         if (args.length > 0 && java.util.List.of("--general-analysis", "--summary-analysis", "--s-notation", "--word-pauses", "--linear-analysis", "--pause-analysis").contains(args[0])) {
             boolean revisions = args[0].equals("--s-notation") || args[0].equals("--word-pauses");
             boolean pause = args[0].equals("--pause-analysis");
@@ -69,6 +70,15 @@ public final class ScriptLogLite {
             GeneralAnalysis analysis = sourceMode ? GeneralAnalysis.analyzeSource(history) : GeneralAnalysis.analyze(history);
             GeneralAnalysisReport.save(analysis, input.getFileName().toString(), output, reference);
             return;
+        }
+        if (args.length > 0 && args[0].equals("--dump-events")) {
+            if (args.length != 3) throw new IllegalArgumentException("Usage: --dump-events INPUT_LOG OUTPUT_JSONL");
+            Path input = Path.of(args[1]), output = Path.of(args[2]);
+            if (input.toAbsolutePath().normalize().equals(output.toAbsolutePath().normalize())
+                    || java.nio.file.Files.exists(output) && java.nio.file.Files.isSameFile(input, output)) {
+                throw new IllegalArgumentException("Choose a dump separate from the input log");
+            }
+            InternalEventDump.save(ReplayLog.load(input, -1), output); return;
         }
         if (args.length > 0 && args[0].equals("--export-webscriptlog")) {
             if (args.length != 3) throw new IllegalArgumentException("Usage: --export-webscriptlog INPUT_LOG OUTPUT_TXT");

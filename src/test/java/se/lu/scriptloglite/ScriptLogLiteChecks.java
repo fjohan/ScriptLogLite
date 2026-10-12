@@ -125,6 +125,7 @@ public final class ScriptLogLiteChecks {
         InputlogChecks.run();
         WebScriptLogChecks.run();
         WebScriptLogExportChecks.run();
+        se.lu.scriptloglite.conversions.ConversionChecks.run();
         EditDialectChecks.run();
         GeneralAnalysisChecks.run();
         SummaryAnalysisChecks.run();

@@ -97,6 +97,12 @@ class TabbedApplication {
         Action saveAs = item(file, "Save Log As…", 0, true, () -> save(activeDocument(), true));
         saveAs.putValue(Action.ACCELERATOR_KEY,
                 KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK));
+        item(file, "Convert files/directories…", 0, false, () -> {
+            javax.swing.JDialog dialog = new javax.swing.JDialog(frame, "File conversions", false);
+            dialog.setDefaultCloseOperation(javax.swing.WindowConstants.DISPOSE_ON_CLOSE);
+            dialog.setContentPane(new se.lu.scriptloglite.conversions.ConversionPanel(directories));
+            dialog.setSize(1050, 650); dialog.setLocationRelativeTo(frame); dialog.setVisible(true);
+        });
         item(file, "Export as WebScriptLog…", 0, false, this::exportWebScriptLog);
         file.addSeparator();
         item(file, "Close", KeyEvent.VK_W, false, this::closeActive);

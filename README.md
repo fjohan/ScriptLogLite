@@ -1001,3 +1001,102 @@ marker also exported. Tests cover colliding submillisecond events, nonempty init
 text, selection direction, export limitations, atomic file output and unchanged
 native save state. This validates the supplied schema and ScriptLogLite reimport;
 it does not imply full native-format provenance survives conversion.
+
+## Dump typed internal events
+
+```sh
+./run.sh --dump-events JF_97.idfx JF_97_internal.jsonl
+./run.sh --dump-events wslog_QQQQQQ_09-10-2026_19_54_58.txt web_internal.jsonl
+```
+
+The input is loaded through the normal importer (JSON, raw, IDFX or WebScriptLog).
+The JSON Lines dump contains a metadata header, then one record per typed event,
+including the initial session. Each record includes its zero-based index, class,
+event type/ID and exact UTC timestamp. Edits include both `removed` and `inserted`
+text; caret, scroll and key records include their stored fields, including nulls.
+Save dialect conversion is not applied. Newlines in text are escaped so every
+record occupies one line. Output is written atomically and must be separate from
+the input. This is an inspection artifact, not a native save/reload format; use
+normal JSON/raw saves to continue a recording.
+
+Independent dump validation reconstructs and reverses both the supplied mobile
+history (1401 events, 296 edits) and JF_97 (1757 events, 432 edits), and compares
+all 296 reconstructed mobile snapshots with the source.
+
+## File and batch conversions (UI and CLI)
+
+Choose **File → Convert files/directories…**. Select an input file or directory,
+an output file or directory, source format (normally Auto detect), and target
+format. **Preview files** lists paths and problems without creating outputs;
+**Convert** runs in the background and reports each success, skip or failure.
+This tool is independent of the open document's saved state, automatic recordings
+and native Save formats preferences.
+
+The shared engine in `se.lu.scriptloglite.conversions` supports every direction
+between ScriptLogLite **JSON**, ScriptLogLite **raw**, Inputlog **IDFX** and
+**WebScriptLog**, including JSON/raw ↔ IDFX, JSON/raw ↔ WebScriptLog and
+IDFX ↔ WebScriptLog. Each source is imported through `ReplayLog` to typed internal
+events, then serialized through the existing codec/exporter. JSON/raw output uses
+the replace dialect by default; recorded callbacks can be selected. IDFX Lite
+labels are enabled by default and can be disabled. WebScriptLog remains an export
+conversion, not a native automatic-save format.
+
+```sh
+# Individual files in either direction. Output filename is used exactly as supplied.
+./run.sh --convert exp_subj_json_1.json converted.idfx --to idfx
+./run.sh --convert exp_subj_raw_1.txt converted_web.txt --to webscriptlog
+./run.sh --convert JF_97.idfx converted.json --to json
+./run.sh --convert JF_97.idfx converted_web.txt --to webscriptlog
+./run.sh --convert wslog_QQQQQQ_09-10-2026_19_54_58.txt converted_raw.txt --to raw
+./run.sh --convert wslog_QQQQQQ_09-10-2026_19_54_58.txt converted.idfx --to idfx
+
+# Batch: JSON/raw sources to IDFX; preview first if desired.
+./run.sh --convert ./logs ./converted --from scriptloglite --to idfx --recursive --dry-run
+./run.sh --convert ./logs ./converted --from scriptloglite --to idfx --recursive
+
+# Batch reverse directions and web export.
+./run.sh --convert ./idfx-logs ./json-logs --from idfx --to json --recursive
+./run.sh --convert ./web-logs ./idfx-logs --from webscriptlog --to idfx
+./run.sh --convert ./idfx-logs ./web-logs --from idfx --to webscriptlog
+```
+
+`--from` accepts `auto`, `scriptloglite` (`sll`), `json`, `raw`, `idfx` or
+`webscriptlog` (`web`). `--to` accepts the four concrete formats. Options are:
+
+- `--recursive`: include subdirectories; default is top-level files only.
+- `--overwrite`: replace existing outputs; default is to skip them.
+- `--dialect replace|recorded`: JSON/raw output vocabulary, default replace.
+- `--no-lite-labels`: omit IDFX provenance extensions.
+- `--dry-run`: show the plan without writing anything.
+
+For directory input, output is a directory (created as needed). Relative
+subdirectories are preserved. Names use the input stem plus `.json`, `_raw.txt`,
+`.idfx` or `_webscriptlog.txt`. For a single file, an existing output directory
+uses the same naming rule; otherwise the output argument is the destination
+filename. Create the directory first if using a new directory for a single file.
+
+Batch discovery considers `.json`, `.txt`, `.log` and `.idfx`, then detects format
+from content. Source filters skip other recognized formats. Unrecognized or
+malformed candidate files are reported as failures while the remaining files
+continue. An output directory inside the input tree is excluded from discovery.
+Input/output aliases (including symlinks), attempts to overwrite other batch
+inputs, and duplicate destination names are rejected. Two inputs named `same.json`
+and `same.txt`, for example, cannot both produce `same.idfx`; narrow the source
+filter or use separate batches. Outputs are staged per file before being moved
+into place, and temporary files are cleaned after errors. CLI failures result in
+a nonzero exit status after the per-file report; skips are reported separately.
+
+Conversion does not recover information missing from a source. Import warnings
+and WebScriptLog export limitations are included in the report. Web input currently
+supports the verified timestamp-to-string record schema and simple browser key
+names; unavailable key identities remain unavailable. Structured key-record
+variants not represented in the supplied mobile fixture fail explicitly without
+partial output, rather than being guessed. We can extend the parser when those
+examples become available.
+
+Regression checks cover all sixteen source/target combinations, native final-text
+reconstruction, the supplied mobile WebScriptLog → IDFX → JSON round trip, mixed
+batch failures, source filtering, recursion, output-tree exclusion, collisions,
+existing-file handling, symlink protection, CLI preview/conversion and headless
+UI construction. More detailed text/timing fidelity checks remain in the format-
+specific import/export suites.
