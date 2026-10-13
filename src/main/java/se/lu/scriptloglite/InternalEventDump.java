@@ -26,14 +26,14 @@ final class InternalEventDump {
                 EditEvent edit = (EditEvent) event;
                 data.put("offset", edit.offset); data.put("removed", edit.removed); data.put("inserted", edit.inserted);
             } else if (event instanceof CaretLogEvent) {
-                CaretLogEvent caret = (CaretLogEvent) event; data.put("dot", caret.dot); data.put("mark", caret.mark);
+                CaretLogEvent caret = (CaretLogEvent) event; data.put("dot", caret.dot); data.put("mark", caret.mark); data.put("generated", caret.generated);
             } else if (event instanceof ScrollLogEvent) {
                 ScrollLogEvent scroll = (ScrollLogEvent) event; data.put("x", scroll.x); data.put("y", scroll.y);
             } else if (event instanceof KeyLogEvent) {
                 KeyLogEvent key = (KeyLogEvent) event;
                 data.put("keyCode", key.keyCode); data.put("keyText", key.keyText); data.put("keyChar", key.keyChar);
                 data.put("modifiers", key.modifiers); data.put("modifiersText", key.modifiersText);
-                data.put("keyLocation", key.keyLocation); data.put("strokeId", key.strokeId);
+                data.put("keyLocation", key.keyLocation); data.put("strokeId", key.strokeId); data.put("repeat", key.repeat);
             }
             line(writer, data);
         }

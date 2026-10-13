@@ -19,7 +19,7 @@ final class WebScriptLogExporter {
         String description() {
             return "Exported WebScriptLog.\n" + shiftedTimes + " timestamps adjusted to preserve ordering at millisecond precision.\n"
                     + unknownKeys + " keys exported as Unidentified.\n" + backwardSelections + " selections exported without direction.\n"
-                    + scrolls + " native scroll records omitted (web scroll schema unavailable).";
+                    + scrolls + " horizontal scroll offsets omitted (web records contain vertical offsets only).";
         }
     }
     private static final class Item {
@@ -39,14 +39,19 @@ final class WebScriptLogExporter {
             if (e instanceof EditEvent) items.add(new Item(t, "text_records", i, 1, null));
             else if (e instanceof CaretLogEvent) {
                 CaretLogEvent c = (CaretLogEvent) e;
+                if (c.generated) continue;
                 if (c.dot < c.mark) report.backwardSelections++;
                 items.add(new Item(t, "cursor_records", i, 2, Math.min(c.dot, c.mark) + ":" + Math.max(c.dot, c.mark)));
             } else if (e instanceof KeyLogEvent) {
                 KeyLogEvent key = (KeyLogEvent) e; String name = keyName(key);
                 if (name.equals("Unidentified")) report.unknownKeys++;
                 boolean down = e.type == EventType.KEY_PRESSED;
-                items.add(new Item(t, "key_records", i, down ? 0 : 3, (down ? "keydown: " : "keyup: ") + name));
-            } else if (e instanceof ScrollLogEvent) report.scrolls++;
+                items.add(new Item(t, "key_records", i, down ? 0 : 3, (down ? key.repeat ? "repeat: " : "keydown: " : "keyup: ") + name));
+            } else if (e instanceof ScrollLogEvent) {
+                ScrollLogEvent scroll = (ScrollLogEvent)e;
+                if (scroll.x != 0) report.scrolls++;
+                items.add(new Item(t, "scroll_records", i, 2, Integer.toString(scroll.y)));
+            }
         }
         Object pointers = log.metadata.get("webScriptLogPointerRecords");
         if (pointers instanceof List) for (Object item : (List<?>) pointers) {
@@ -54,7 +59,12 @@ final class WebScriptLogExporter {
             items.add(new Item(((Number) p.get("when")).longValue(), "key_records", -1, 0, p.get("record").toString()));
         }
         // Stable sorting preserves captured order; source pointers are interleaved by time.
-        items.sort(Comparator.comparingLong(item -> item.original));
+        Comparator<Item> order = Comparator.comparingLong(item -> item.original);
+        // Imported browser streams have a defined same-millisecond order. IDFX
+        // release reconstruction may interleave them differently; restore that
+        // order for web output without changing the internal replay timeline.
+        if (log.metadata.containsKey("webScriptLogHeader")) order = order.thenComparingInt(item -> item.index < 0 ? -1 : item.priority);
+        items.sort(order);
         Map<String, Long> lastInSection = new LinkedHashMap<>(); long last = start; int phase = -1;
         for (Item item : items) {
             long t = Math.max(last, item.original);
@@ -66,17 +76,17 @@ final class WebScriptLogExporter {
         long end = Math.max(last, log.events.get(log.events.size() - 1).time.toEpochMilli());
         writer.write("{\n  \"header_records\": {\"starttime\": " + start + ", \"endtime\": " + end + "}");
         ReplayCursor cursor = new ReplayCursor(log);
-        for (String section : List.of("text_records", "cursor_records", "key_records")) {
+        for (String section : List.of("text_records", "cursor_records", "key_records", "scroll_records")) {
             writer.write(",\n  " + Json.quote(section) + ": {"); boolean first = true;
             for (Item item : items) if (item.section.equals(section)) {
                 String value = item.value;
                 if (section.equals("text_records")) { cursor.seek(item.index); value = cursor.state().text; }
                 writer.write(first ? "\n    " : ",\n    "); first = false;
-                writer.write(Json.quote(Long.toString(item.time)) + ": " + Json.quote(value));
+                writer.write(Json.quote(Long.toString(item.time)) + ": " + (section.equals("scroll_records") ? value : Json.quote(value)));
             }
             writer.write(first ? "}" : "\n  }");
         }
-        for (String section : List.of("scroll_records", "image_records", "window_records")) {
+        for (String section : List.of("image_records", "window_records")) {
             Object retained = log.metadata.get("webScriptLog_" + section);
             writer.write(",\n  " + Json.quote(section) + ": " + Json.stringify(retained instanceof Map ? retained : Map.of(), 0));
         }
@@ -100,6 +110,9 @@ final class WebScriptLogExporter {
             case java.awt.event.KeyEvent.VK_SHIFT: return "Shift";
             case java.awt.event.KeyEvent.VK_CONTROL: return "Control";
             case java.awt.event.KeyEvent.VK_ALT: return "Alt";
+            case java.awt.event.KeyEvent.VK_ALT_GRAPH: return "AltGraph";
+            case java.awt.event.KeyEvent.VK_PAGE_UP: return "PageUp";
+            case java.awt.event.KeyEvent.VK_PAGE_DOWN: return "PageDown";
             case java.awt.event.KeyEvent.VK_META: return "Meta";
             case java.awt.event.KeyEvent.VK_TAB: return "Tab";
             case java.awt.event.KeyEvent.VK_DELETE: return "Delete";
@@ -111,6 +124,13 @@ final class WebScriptLogExporter {
             case java.awt.event.KeyEvent.VK_END: return "End";
             case java.awt.event.KeyEvent.VK_ESCAPE: return "Escape";
             default:
+                if ((key.keyChar == null || key.keyChar.isEmpty() || (key.keyChar.length() == 1 && Character.isISOControl(key.keyChar.charAt(0))))
+                        && key.keyCode >= java.awt.event.KeyEvent.VK_A && key.keyCode <= java.awt.event.KeyEvent.VK_Z) {
+                    boolean shift = key.modifiers != null && (key.modifiers & java.awt.event.InputEvent.SHIFT_DOWN_MASK) != 0;
+                    return Character.toString((char) (shift ? key.keyCode : Character.toLowerCase((char) key.keyCode)));
+                }
+                if ((key.keyChar == null || key.keyChar.isEmpty()) && key.keyCode >= java.awt.event.KeyEvent.VK_0
+                        && key.keyCode <= java.awt.event.KeyEvent.VK_9) return Character.toString((char) (int) key.keyCode);
                 return key.keyChar != null && key.keyChar.length() == 1 && !Character.isISOControl(key.keyChar.charAt(0)) ? key.keyChar : "Unidentified";
         }
     }

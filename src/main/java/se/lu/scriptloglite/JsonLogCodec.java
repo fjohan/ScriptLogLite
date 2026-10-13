@@ -44,6 +44,7 @@ class JsonLogCodec {
             } else if (item instanceof CaretLogEvent) {
                 CaretLogEvent caret = (CaretLogEvent) item;
                 event.put("dot", caret.dot); event.put("mark", caret.mark);
+                if (caret.generated) event.put("generated", true);
             } else if (item instanceof ScrollLogEvent) {
                 ScrollLogEvent scroll = (ScrollLogEvent) item;
                 event.put("viewX", scroll.x); event.put("viewY", scroll.y);
@@ -56,6 +57,7 @@ class JsonLogCodec {
                 if (key.modifiersText != null) event.put("modifiersText", key.modifiersText);
                 if (key.keyLocation != null) event.put("keyLocation", key.keyLocation);
                 if (key.strokeId != null) event.put("strokeId", key.strokeId);
+                if (key.repeat) event.put("repeat", true);
             }
             writer.write(i == 1 ? "\n    " : ",\n    ");
             writer.write(Json.stringify(event, 2));
@@ -142,11 +144,11 @@ class JsonLogCodec {
                         String inserted = type == EventType.REMOVE || fields.get("str") == null ? null : string(fields, "str");
                         EditEvent edit = new EditEvent(time, type, offset, text.substring(offset, offset + length), inserted);
                         edit.apply(text); event = edit; break;
-                    case CARET: event = new CaretLogEvent(time, integer(fields, "dot"), integer(fields, "mark")); break;
+                    case CARET: event = new CaretLogEvent(time, integer(fields, "dot"), integer(fields, "mark"), Boolean.TRUE.equals(fields.get("generated"))); break;
                     case SCROLL: event = new ScrollLogEvent(time, integer(fields, "viewX"), integer(fields, "viewY")); break;
                     default: event = new KeyLogEvent(time, type, integer(fields, "keyCode"), optionalString(fields, "keyText"),
                             optionalString(fields, "keyChar"), optionalInt(fields, "modifiers"), optionalString(fields, "modifiersText"),
-                            optionalInt(fields, "keyLocation"), optionalString(fields, "strokeId"));
+                            optionalInt(fields, "keyLocation"), optionalString(fields, "strokeId"), Boolean.TRUE.equals(fields.get("repeat")));
                 }
                 events.add(event);
             } catch (RuntimeException exception) {

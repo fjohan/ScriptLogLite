@@ -39,7 +39,7 @@ final class RawLogCodec {
                 writer.write(" " + edit.offset + " " + edit.removed.length());
                 if (edit.type != EventType.REMOVE) writer.write(" " + encode(edit.inserted));
             } else if (event instanceof CaretLogEvent) {
-                CaretLogEvent caret = (CaretLogEvent) event; writer.write(" " + caret.dot + " " + caret.mark);
+                CaretLogEvent caret = (CaretLogEvent) event; writer.write(" " + caret.dot + " " + caret.mark); if (caret.generated) extra(writer, "generated", true);
             } else if (event instanceof ScrollLogEvent) {
                 ScrollLogEvent scroll = (ScrollLogEvent) event; writer.write(" " + scroll.x + " " + scroll.y);
             } else if (event instanceof KeyLogEvent) {
@@ -47,6 +47,7 @@ final class RawLogCodec {
                 extra(writer, "keyText", key.keyText); extra(writer, "keyChar", key.keyChar);
                 extra(writer, "modifiers", key.modifiers); extra(writer, "modifiersText", key.modifiersText);
                 extra(writer, "keyLocation", key.keyLocation); extra(writer, "strokeId", key.strokeId);
+                if (key.repeat) extra(writer, "repeat", true);
             }
             writer.write('\n');
         }
@@ -162,8 +163,8 @@ final class RawLogCodec {
                         EditEvent edit = new EditEvent(time, type, offset, text.substring(offset, offset + length), type == EventType.REMOVE ? null : decode(parts[5]));
                         edit.apply(text); event = edit; break;
                     case CARET: case SCROLL:
-                        if (parts.length != 5) throw new IllegalArgumentException("Invalid view event fields");
-                        event = type == EventType.CARET ? new CaretLogEvent(time, Integer.parseInt(parts[3]), Integer.parseInt(parts[4]))
+                        if (parts.length != 5 && !(type == EventType.CARET && parts.length == 6 && parts[5].equals("generated=true"))) throw new IllegalArgumentException("Invalid view event fields");
+                        event = type == EventType.CARET ? new CaretLogEvent(time, Integer.parseInt(parts[3]), Integer.parseInt(parts[4]), parts.length == 6)
                                 : new ScrollLogEvent(time, Integer.parseInt(parts[3]), Integer.parseInt(parts[4])); break;
                     case KEY_PRESSED: case KEY_RELEASED:
                         Map<String, String> extras = new LinkedHashMap<>();
@@ -173,7 +174,7 @@ final class RawLogCodec {
                             extras.put(parts[j].substring(0, equals), decode(parts[j].substring(equals + 1)));
                         }
                         event = new KeyLogEvent(time, type, Integer.parseInt(parts[3]), extras.get("keyText"), extras.get("keyChar"),
-                                ReplayLog.optionalInteger(extras, "modifiers"), extras.get("modifiersText"), ReplayLog.optionalInteger(extras, "keyLocation"), extras.get("strokeId")); break;
+                                ReplayLog.optionalInteger(extras, "modifiers"), extras.get("modifiersText"), ReplayLog.optionalInteger(extras, "keyLocation"), extras.get("strokeId"), Boolean.parseBoolean(extras.get("repeat"))); break;
                     default: throw new IllegalArgumentException("Unexpected event " + type.name);
                 }
                 events.add(event);

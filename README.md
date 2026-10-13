@@ -976,16 +976,18 @@ selectionStart:selectionEnd ranges; `key_records` holds browser-style keydown/ke
 names. Nonempty initial text becomes an initial snapshot. Known special keys are
 translated to browser names, printable observed characters are retained, and
 unavailable identities become `Unidentified`. Imported web pointer records are
-retained. Original duplicate caret observations are exported as recorded.
+retained. Original duplicate caret observations are exported as recorded. Generated
+closing markers and derived IDFX caret states are flagged internally and excluded
+from web export when provenance identifies them.
 
 Web dictionaries allow only one record of each stream per millisecond, whereas
 native timestamps have finer precision. Colliding timestamps move forward by the
 minimum whole milliseconds needed to avoid overwriting records and preserve
 reimport order; the header end time extends if necessary. The export report gives
 the number of adjusted timestamps, unidentified keys, backward selections whose
-direction cannot be represented, and omitted native scroll events. No native
-scroll conversion is guessed because the sample's web scroll stream is empty;
-retained web scroll/image/window streams pass through. Fonts, styled-text attributes,
+direction cannot be represented, and omitted horizontal scroll offsets.
+Numeric web scroll records contain vertical viewport offsets; these are imported
+and exported as internal scroll events. Image/window streams pass through. Fonts, styled-text attributes,
 stroke IDs, exact native callback vocabulary and explicit modifier fields do not
 have equivalents in the supplied web schema.
 
@@ -1100,3 +1102,61 @@ batch failures, source filtering, recursion, output-tree exclusion, collisions,
 existing-file handling, symlink protection, CLI preview/conversion and headless
 UI construction. More detailed text/timing fidelity checks remain in the format-
 specific import/export suites.
+
+### Desktop WebScriptLog validation
+
+`wslog_QQQQQQ_261012.txt` verifies the desktop string-valued key schema. It uses
+`keydown: <key>`, `keyup: <key>` and `repeat: <key>`; `<key>` may be a literal
+space. Only the single separator space after the colon is removed, so a Space
+key is retained instead of being trimmed to an empty identity.
+
+Explicit repeat records become internal key-press events with `repeat: true`.
+The optional flag survives JSON/raw saving and internal-event dumps, and web
+export writes it back as `repeat:`. Labelled IDFX exports preserve it using the
+`ScriptLogLite.repeat` extension; plain IDFX still represents the repeated press
+but does not retain this explicit provenance flag. Modifier presses/releases and
+Unicode printable keys use the existing internal key representation; no text
+snapshot is used to invent a key identity.
+
+The desktop regression fixture validates all **252 text snapshots**, **563 key
+records**, **64 Space records** and **11 explicit repeats**. All key identities
+are recognized. Reconstructed text, reverse replay, JSON/raw persistence, IDFX
+reconstruction/repeat labels and the internal analyses are checked. Re-export to
+WebScriptLog matches the original text/key records and their timestamps exactly.
+The supplied mobile fixture continues to pass unchanged.
+
+## Recorded action testbed
+
+`testbed-sll.json` is covered by `TestbedRoundTripChecks` in `./run.sh --self-test`.
+The suite compares all 455 successive text states and edit payloads through native
+JSON/raw, labelled IDFX and WebScriptLog round trips, along with key action ordering,
+timing, caret/selection observations and reverse replay. Plain IDFX without Lite
+labels is also checked for all 455 text states. Format-specific losses are kept
+separate from reconstruction failures; see [testbed-roundtrip-report.md](testbed-roundtrip-report.md).
+
+The testbed exposed missing web navigation mappings (PageUp/PageDown/AltGraph),
+Ctrl-letter shortcut identities, printable values without a Java physical key code,
+and ambiguous edits involving repeated text or selected ranges. Web snapshot import
+now prefers verified pre-edit selections and Backspace/Delete anchors when they
+reproduce the full snapshot exactly. JSON/raw preserve native history; labelled
+IDFX retains the original caret observations plus intermediate observations; web
+preserves normalized selection ranges and millisecond timing, with reported losses
+of direction and viewport information. These are conversion checks rather than
+independent expected-outcome tests of each user gesture.
+
+
+`testbed-wscr.txt` is covered by `WebTestbedRoundTripChecks`. The web →
+JSON/raw → web and web → labelled IDFX → web routes reproduce every original
+stream and timestamp exactly: 605 text snapshots, 2,540 cursor records, 2,679
+keyboard/pointer records, and 74 vertical scroll records. Every reconstructed
+text state and reverse replay are also checked. See `testbed-wscr-roundtrip-report.md`.
+
+
+`testbed-ilog.idfx` exercises Word selection observations, selected deletion/cut,
+and delayed replacement notifications during key repeat. Its JSON/raw and
+labelled IDFX round trips preserve all 670 edit states and edit timings; the web
+route preserves all edit payloads/states with at most 2 ms edit/key timing shifts
+and four unidentified characterless OEM observations. See
+`testbed-ilog-roundtrip-report.md` for the differences from original XML and
+`testbed-ilog-conversions/` for converted files. The fixture is checked by
+`InputlogTestbedRoundTripChecks` in `./run.sh --self-test`.

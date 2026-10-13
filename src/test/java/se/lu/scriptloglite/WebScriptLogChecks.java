@@ -66,6 +66,39 @@ final class WebScriptLogChecks {
             // All existing internal analysis entry points accept the converted history.
             GeneralAnalysis.analyze(log); LinearAnalysis.analyze(log, 200, 60); PauseAnalysis.analyze(log, 200, 5); WordPausesAnalysis.analyze(log);
         }
+        Path desktop = Path.of("wslog_QQQQQQ_261012.txt");
+        if (Files.exists(desktop)) {
+            ReplayLog log = ReplayLog.load(desktop, -1);
+            String desktopSource = Files.readString(desktop); if (desktopSource.startsWith("\uFEFF")) desktopSource = desktopSource.substring(1);
+            Map<?, ?> root = (Map<?, ?>) new Json(desktopSource).parse();
+            Map<?, ?> snapshots = (Map<?, ?>) root.get("text_records");
+            ReplayCursor cursor = new ReplayCursor(log); int index = 0;
+            for (Map.Entry<?, ?> entry : snapshots.entrySet()) {
+                Instant when = Instant.ofEpochMilli(Long.parseLong(entry.getKey().toString()));
+                while (index + 1 < log.events.size() && !log.events.get(index + 1).time.isAfter(when)) index++;
+                cursor.seek(index); check(cursor.state().text.equals(entry.getValue()), "desktop snapshot exact");
+            }
+            List<LogEvent> keys = new ArrayList<>(); for (LogEvent e : log.events) if (e instanceof KeyLogEvent) keys.add(e);
+            check(keys.size() == 563, "desktop all key records retained");
+            check(keys.stream().filter(e -> ((KeyLogEvent)e).repeat).count() == 11, "desktop repeat records");
+            check(keys.stream().filter(e -> ((KeyLogEvent)e).keyChar.equals(" ")).count() == 64, "desktop Space identity retained");
+            check(keys.stream().noneMatch(e -> ((KeyLogEvent)e).keyCode == 0), "desktop all identities known");
+            for (ReplayLog round : List.of(AnalysisTestSupport.jsonRoundTrip(log), AnalysisTestSupport.rawRoundTrip(log))) {
+                check(round.finalText.equals(log.finalText), "desktop JSON/raw text");
+                check(round.events.stream().filter(e -> e instanceof KeyLogEvent && ((KeyLogEvent)e).repeat).count() == 11, "desktop repeat flag round trip");
+            }
+            java.io.StringWriter exported = new java.io.StringWriter(); WebScriptLogExporter.write(log, exported);
+            Map<?, ?> back = (Map<?, ?>) new Json(exported.toString()).parse();
+            check(root.get("key_records").equals(back.get("key_records")), "desktop browser keys/repeats export exactly");
+            check(root.get("text_records").equals(back.get("text_records")), "desktop snapshots export exactly");
+            cursor.seek(0); check(cursor.state().text.isEmpty(), "desktop reverse replay");
+            GeneralAnalysis.analyze(log); LinearAnalysis.analyze(log, 200, 60); PauseAnalysis.analyze(log, 200, 5); WordPausesAnalysis.analyze(log);
+            java.io.StringWriter idfx = new java.io.StringWriter(); InputlogExporter.write(log.events, log.metadata, idfx, true);
+            ReplayLog xml = InputlogImporter.load(idfx.toString());
+            check(xml.finalText.equals(log.finalText), "desktop IDFX reconstruction");
+            check(xml.events.stream().filter(e -> e instanceof KeyLogEvent && ((KeyLogEvent)e).repeat).count() == 11, "IDFX labels preserve repeats");
+            System.out.println("Desktop WebScriptLog: 252 snapshots, 563 keys including 64 spaces/11 repeats, JSON/raw, IDFX and exact web export checked");
+        }
         ReplayLog ambiguous = WebScriptLogImporter.load("{\"header_records\":{\"starttime\":0,\"endtime\":10},\"text_records\":{\"1\":\"aaa\",\"3\":\"aaaa\",\"5\":\"aaa\"},\"cursor_records\":{\"1\":\"3:3\",\"3\":\"1:1\",\"5\":\"2:2\"}}");
         List<EditEvent> edits = new ArrayList<>(); for (LogEvent e : ambiguous.events) if (e instanceof EditEvent) edits.add((EditEvent) e);
         check(edits.get(1).offset == 0 && edits.get(2).offset == 2, "cursor disambiguates repeated-character insert/delete");

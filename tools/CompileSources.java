@@ -36,6 +36,9 @@ public final class CompileSources {
             options.add("src/test/java/se/lu/scriptloglite/WebScriptLogChecks.java");
             options.add("src/test/java/se/lu/scriptloglite/WebScriptLogExportChecks.java");
             options.add("src/test/java/se/lu/scriptloglite/conversions/ConversionChecks.java");
+            options.add("src/test/java/se/lu/scriptloglite/TestbedRoundTripChecks.java");
+            options.add("src/test/java/se/lu/scriptloglite/WebTestbedRoundTripChecks.java");
+            options.add("src/test/java/se/lu/scriptloglite/InputlogTestbedRoundTripChecks.java");
             options.add("src/test/java/se/lu/scriptloglite/EditDialectChecks.java");
             options.add("src/test/java/se/lu/scriptloglite/AnalysisTestSupport.java");
             options.add("src/test/java/se/lu/scriptloglite/inputlog/GeneralAnalysisChecks.java");

@@ -37,7 +37,7 @@ final class WebScriptLogExportChecks {
                 new KeyLogEvent(time.plusNanos(6), EventType.KEY_RELEASED, KeyEvent.VK_A, "A", "a", 0, "", 1),
                 new ScrollLogEvent(time.plusNanos(7), 0, 10)));
         java.io.StringWriter writer = new java.io.StringWriter(); WebScriptLogExporter.Report report = WebScriptLogExporter.write(collision, writer);
-        check(report.shiftedTimes > 0 && report.scrolls == 1 && report.backwardSelections == 1, "conversion limitations reported");
+        check(report.shiftedTimes > 0 && report.scrolls == 0 && report.backwardSelections == 1, "conversion limitations reported");
         ReplayLog imported = WebScriptLogImporter.load(writer.toString());
         check(imported.finalText.equals(collision.finalText), "collisions and nonempty initial text survive");
         check(texts(imported).equals(List.of("start", "starta", "Starta")), "colliding snapshots are not overwritten");

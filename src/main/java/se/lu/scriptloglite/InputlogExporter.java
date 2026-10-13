@@ -109,7 +109,8 @@ final class InputlogExporter {
             } else if (event instanceof CaretLogEvent) {
                 CaretLogEvent caret = (CaretLogEvent) event; dot = caret.dot; mark = caret.mark;
                 open("selection", event.time); label("ScriptLogLite.dot", Integer.toString(dot));
-                label("ScriptLogLite.mark", Integer.toString(mark)); part("wordlog");
+                label("ScriptLogLite.mark", Integer.toString(mark));
+                if (caret.generated) label("ScriptLogLite.generatedCaret", "true"); part("wordlog");
                 field("start", Math.min(dot, mark)); field("end", Math.max(dot, mark)); closePartAndEvent();
             } else if (extensions && event instanceof ScrollLogEvent) {
                 ScrollLogEvent scroll = (ScrollLogEvent) event;
@@ -135,11 +136,14 @@ final class InputlogExporter {
         boolean backspace = next != null && dot == mark && key.keyCode == KeyEvent.VK_BACK_SPACE
                 && next.offset == dot - 1 && next.removed.length() == 1 && next.replacement().isEmpty()
                 && (modifiers & InputEvent.CTRL_DOWN_MASK) == 0;
+        if (typing && key.keyChar != null && !key.keyChar.equals("undefined") && !key.keyChar.equals(next.replacement())) typing = false;
         boolean replay = typing || backspace;
         String value = typing ? next.replacement() : backspace ? "\b" : key.keyChar;
         if (value == null || value.equals("undefined")) value = "";
         String virtual = windowsKey(key);
         open("keyboard", key.time);
+        if (key.keyCode == KeyEvent.VK_ALT_GRAPH) label("ScriptLogLite.keyCode", Integer.toString(key.keyCode));
+        if (key.repeat) label("ScriptLogLite.repeat", "true");
         if (replay) label("ScriptLogLite.editElapsedNanos", Long.toString(nanos(next.time)));
         if (releases.containsKey(index)) label("ScriptLogLite.releaseElapsedNanos", Long.toString(nanos(events.get(releases.get(index)).time)));
         part("wordlog"); field("position", dot); field("documentLength", text.length() + 1);

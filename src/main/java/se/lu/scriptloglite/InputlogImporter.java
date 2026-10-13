@@ -90,14 +90,14 @@ final class InputlogImporter {
                 String precise = label(event, InputlogExporter.TIME);
                 if (!exportedHeader.isEmpty() && precise != null) causalTime = epoch.plusNanos(Long.parseLong(precise));
                 switch (type) {
-                    case "keyboard": keyboard(event, win, start, end); break;
+                    case "keyboard": keyboard(event, win, start, end, i); break;
                     case "selection":
                         if (!exportedHeader.isEmpty() && label(event, "ScriptLogLite.viewX") != null) {
                             events.add(new ScrollLogEvent(causalTime, Integer.parseInt(label(event, "ScriptLogLite.viewX")),
                                     Integer.parseInt(label(event, "ScriptLogLite.viewY"))));
                         } else if (!exportedHeader.isEmpty() && label(event, "ScriptLogLite.dot") != null) {
                             caret(coordinate(Integer.parseInt(label(event, "ScriptLogLite.dot"))),
-                                    coordinate(Integer.parseInt(label(event, "ScriptLogLite.mark"))));
+                                    coordinate(Integer.parseInt(label(event, "ScriptLogLite.mark"))), Boolean.parseBoolean(label(event, "ScriptLogLite.generatedCaret")));
                         } else selection(part(event, "wordlog"));
                         break;
                     case "replacement": replacement(event, i); break;
@@ -150,7 +150,7 @@ final class InputlogImporter {
         return log;
     }
 
-    private void keyboard(Element event, Element win, long start, long end) {
+    private void keyboard(Element event, Element win, long start, long end, int index) {
         Element word = part(event, "wordlog");
         if (word == null) {
             if (start <= 0 || !outsideDocument(start)) throw new IllegalArgumentException("keyboard event lacks Word coordinates without confirmed external focus");
@@ -158,7 +158,11 @@ final class InputlogImporter {
             return;
         }
         int position = integer(word, "position"), length = integer(word, "documentLength");
-        if (length != text.length() + 1) throw new IllegalArgumentException("documentLength " + length
+        boolean delayed = length < text.length() + 1 && lastKey.equals("VK_DELETE")
+                && field(win, "key").equals("VK_DELETE") && field(word, "replay").equalsIgnoreCase("false")
+                && pendingDeletes(index, position, text.length() + 1 - length);
+        if (delayed) inferred.add("Event " + event.getAttribute("id") + ": documentLength precedes delayed explicit Delete replacements; no extra edit invented.");
+        if (length != text.length() + 1 && !delayed) throw new IllegalArgumentException("documentLength " + length
                 + " disagrees with reconstructed Word length " + (text.length() + 1)
                 + "; pre-existing text or an unsupported edit may be missing");
         position = coordinate(position);
@@ -170,10 +174,10 @@ final class InputlogImporter {
         int modifiers = modifiers(win);
         Integer location = key.startsWith("VK_L") && isModifier(key) ? KeyEvent.KEY_LOCATION_LEFT
                 : key.startsWith("VK_R") && isModifier(key) ? KeyEvent.KEY_LOCATION_RIGHT : KeyEvent.KEY_LOCATION_STANDARD;
-        int code = keyCode(key);
+        int code = label(event, "ScriptLogLite.keyCode") == null ? keyCode(key) : Integer.parseInt(label(event, "ScriptLogLite.keyCode"));
         // Keep the Windows VK name even when Swing has no matching key code.
         events.add(new KeyLogEvent(exportedHeader.isEmpty() ? time(start) : causalTime, EventType.KEY_PRESSED, code, key, value,
-                modifiers, InputEvent.getModifiersExText(modifiers), location, "idfx:" + event.getAttribute("id")));
+                modifiers, InputEvent.getModifiersExText(modifiers), location, "idfx:" + event.getAttribute("id"), Boolean.parseBoolean(label(event, "ScriptLogLite.repeat"))));
         Instant releaseTime = !exportedHeader.isEmpty() && label(event, "ScriptLogLite.releaseElapsedNanos") != null
                 ? epoch.plusNanos(Long.parseLong(label(event, "ScriptLogLite.releaseElapsedNanos"))) : time(Math.max(start, end));
         if (end >= start) events.add(new KeyLogEvent(releaseTime, EventType.KEY_RELEASED, code, key, value,
@@ -224,7 +228,22 @@ final class InputlogImporter {
         Element word = part(event, "wordlog");
         int start = integer(word, "start"), end = integer(word, "end");
         String replacement = decode(field(word, "newtext"));
+        // A range including Word's mandatory final paragraph includes its LF in newtext.
+        // The internal document excludes that paragraph mark.
+        if (end == text.length() + 1 && replacement.endsWith("\n")) replacement = replacement.substring(0, replacement.length() - 1);
         int expected = nextWordLength(index);
+        // Selected Backspace/Delete sometimes reports the surviving right neighbour.
+        // Require the selected range, matching neighbour and a later length witness.
+        if ((lastKey.equals("VK_BACK") || lastKey.equals("VK_DELETE") || (lastControl && lastKey.equals("VK_X"))) && dot != mark
+                && start == Math.min(dot, mark) && end == Math.max(dot, mark)
+                && !replacement.isEmpty() && end <= text.length()
+                && text.substring(end).startsWith(replacement)) {
+            String candidate = text.substring(0, start) + text.substring(end);
+            if (observedLength(index, candidate) == candidate.length()) {
+                inferred.add("Event " + event.getAttribute("id") + ": selected-range deletion; replacement is the surviving right neighbour, confirmed by following documentLength.");
+                edit(start, end, ""); caret(start, start); return;
+            }
+        }
         int normalLength = text.length() - (end - start) + replacement.length();
         // Word may report the surviving final paragraph rather than the range cut.
         // Accept a selected-range cut only when Ctrl+X and the next Word length agree.
@@ -261,6 +280,40 @@ final class InputlogImporter {
                 + "' insertion using the preceding caret and resulting position.");
     }
 
+    private boolean pendingDeletes(int index, int position, int missing) {
+        int removed = 0;
+        for (int i = index + 1; i < source.size(); i++) {
+            Element event = source.get(i), word = part(event, "wordlog");
+            String type = event.getAttribute("type");
+            if (type.equals("keyboard") && (word == null || !field(part(event, "winlog"), "key").equals("VK_DELETE")
+                    || integer(word, "position") != position)) return false;
+            if (type.equals("insert")) return false;
+            if (type.equals("replacement")) {
+                if (integer(word, "start") != position || !decode(field(word, "newtext")).isEmpty()) return false;
+                removed += integer(word, "end") - position;
+                if (removed >= missing) return true;
+            }
+        }
+        return false;
+    }
+
+    private int observedLength(int index, String candidate) {
+        for (int i = index + 1; i < source.size(); i++) {
+            Element event = source.get(i); String type = event.getAttribute("type");
+            Element word = part(event, "wordlog");
+            if (type.equals("keyboard") && word != null) return integer(word, "documentLength") - 1;
+            if (type.equals("insert")) return -1;
+            if (type.equals("replacement")) {
+                int a = integer(word, "start"), b = integer(word, "end");
+                String value = decode(field(word, "newtext"));
+                if (b == candidate.length() + 1 && value.endsWith("\n")) value = value.substring(0, value.length() - 1);
+                b = Math.min(b, candidate.length());
+                if (a < 0 || a > b || !candidate.substring(a, b).equals(value)) return -1;
+            }
+        }
+        return -1;
+    }
+
     // Look ahead only through non-edit operations; never use a length from a later edit.
     private int nextWordLength(int index) {
         for (int i = index + 1; i < source.size(); i++) {
@@ -280,8 +333,11 @@ final class InputlogImporter {
         text.replace(start, end, inserted);
     }
     private void caret(int newDot, int newMark) {
+        caret(newDot, newMark, !exportedHeader.isEmpty());
+    }
+    private void caret(int newDot, int newMark, boolean generated) {
         dot = newDot; mark = newMark;
-        events.add(new CaretLogEvent(causalTime, dot, mark));
+        events.add(new CaretLogEvent(causalTime, dot, mark, generated));
     }
     private int coordinate(int value) {
         if (value < 0 || value > text.length() + 1) throw new IllegalArgumentException("Word coordinate " + value + " outside document");
@@ -304,8 +360,10 @@ final class InputlogImporter {
     }
     private static boolean isModifier(String key) { return key.endsWith("SHIFT") || key.endsWith("CONTROL") || key.endsWith("MENU"); }
     private static int keyCode(String name) {
+        if (name.equals("0")) return KeyEvent.VK_UNDEFINED; // Numeric Windows enum Undefined, not VK_0.
         String key = name.startsWith("VK_") ? name.substring(3) : name;
         switch (key) {
+            case "PRIOR": return KeyEvent.VK_PAGE_UP; case "NEXT": return KeyEvent.VK_PAGE_DOWN;
             case "BACK": return KeyEvent.VK_BACK_SPACE;
             case "RETURN": return KeyEvent.VK_ENTER;
             case "LSHIFT": case "RSHIFT": return KeyEvent.VK_SHIFT;

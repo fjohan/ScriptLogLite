@@ -7,17 +7,22 @@ public final class KeyLogEvent extends LogEvent {
     public final String keyText, keyChar, modifiersText;
     public final Integer modifiers, keyLocation;
     public final String strokeId;
+    public final boolean repeat;
     public KeyLogEvent(Instant time, EventType type, int keyCode, String keyText, String keyChar,
             Integer modifiers, String modifiersText, Integer keyLocation) {
         this(time, type, keyCode, keyText, keyChar, modifiers, modifiersText, keyLocation, null);
     }
     public KeyLogEvent(Instant time, EventType type, int keyCode, String keyText, String keyChar,
             Integer modifiers, String modifiersText, Integer keyLocation, String strokeId) {
-        super(time, type); this.strokeId = strokeId; this.keyCode = keyCode; this.keyText = keyText; this.keyChar = keyChar;
+        this(time, type, keyCode, keyText, keyChar, modifiers, modifiersText, keyLocation, strokeId, false);
+    }
+    public KeyLogEvent(Instant time, EventType type, int keyCode, String keyText, String keyChar,
+            Integer modifiers, String modifiersText, Integer keyLocation, String strokeId, boolean repeat) {
+        super(time, type); this.repeat = repeat; this.strokeId = strokeId; this.keyCode = keyCode; this.keyText = keyText; this.keyChar = keyChar;
         this.modifiers = modifiers; this.modifiersText = modifiersText; this.keyLocation = keyLocation;
     }
     LogEvent at(Instant time) {
-        return new KeyLogEvent(time, type, keyCode, keyText, keyChar, modifiers, modifiersText, keyLocation, strokeId);
+        return new KeyLogEvent(time, type, keyCode, keyText, keyChar, modifiers, modifiersText, keyLocation, strokeId, repeat);
     }
     String description() { return type.name + " keyCode=" + keyCode; }
 }
